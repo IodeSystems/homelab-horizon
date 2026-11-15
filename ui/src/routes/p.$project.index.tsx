@@ -1,0 +1,535 @@
+/**
+ * `/p/$project` — what one project declares. Its Overview tab.
+ *
+ * The overview that `/projects` used to render into a detail panel beside a
+ * picker held in `useState`. It is a route now, so "the storefront project" has
+ * an address: it can be linked, bookmarked, and put in a ticket.
+ *
+ * Amendment 6 (flows over prose): tables, one-line empty states with the Add
+ * button beside them, and the explanation in each chip's title rather than in
+ * a paragraph. The four states from plan/design/example-projection.md §4 still
+ * render as different cells — they are just not paragraphs any more:
+ *
+ *   ONE ENVIRONMENT is the common case, not an unfinished ladder.
+ *   NAME ≠ POSTURE: two fields, two meanings, never merged into one column.
+ *   NO DECLARED VERSION means NO PACKAGE AT ALL, not "latest".
+ *   NO MACHINE is the ordinary early state of a rung — and is different again
+ *   from hz being unable to say, which is why placement has three answers.
+ *
+ * A fifth, which this screen is the only one to hit: NO ENVIRONMENT AT ALL.
+ * Three of the eight live projects are in that state and it is not an error —
+ * a project is declared before anything moves into it.
+ */
+import { useState } from "react";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import {
+  Alert,
+  Box,
+  Chip,
+  IconButton,
+  Paper,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Typography,
+} from "@mui/material";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlined";
+import UpgradeIcon from "@mui/icons-material/Upgrade";
+import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
+import PlayArrowOutlinedIcon from "@mui/icons-material/PlayArrowOutlined";
+import PanToolOutlinedIcon from "@mui/icons-material/PanToolOutlined";
+import { useEnvironments, useServices, useVersionDrift } from "../api/hooks";
+import type { EnvironmentResp, InstanceVersion, PromotionResp } from "../api/generated-types";
+import {
+  useAppliedState,
+  useArtifacts,
+  useLatestDeploys,
+  useProjectLines,
+  usePromotions,
+} from "../api/deployHooks";
+import {
+  AppliedCell,
+  ApplyDialog,
+  HoldCell,
+  HoldDialog,
+  applyOffer,
+  stateFor,
+  type AppliedSource,
+} from "../components/model/ApplyBits";
+import { ReleaseLinesTable } from "../components/model/ReleaseLines";
+import {
+  readFeed,
+  readInstanceSource,
+  readPlacement,
+  readRung,
+} from "../components/model/model";
+import {
+  inScope,
+  CONFIG_AT,
+  type ProjectIndex,
+  type ProjectRoute,
+} from "../components/model/projectRoutes.ts";
+import { CannotAskBanner, ToneChip } from "../components/model/ModelBits";
+import { AddButton, EmptyRow, TabHeader } from "../components/model/FlowBits";
+import {
+  LOCATION_COLUMN_LABEL,
+  LocationCell,
+  ProjectLink,
+  ScopeControl,
+  scopeOf,
+  useProjectContext,
+} from "../components/model/ProjectBits";
+import {
+  AddEnvironmentDialog,
+  EditEnvironmentDialog,
+  RemoveEnvironmentDialog,
+} from "../components/model/EnvironmentDialogs";
+import {
+  PromoteDialog,
+  RecentPromotions,
+  ReportedCell,
+  reportFor,
+  type ReportSource,
+} from "../components/model/DeployBits";
+import { useInstances } from "../api/instanceHooks";
+import { AddNestedInstanceDialog, NestedInstancesSection } from "../components/instances/NestedBootstrap";
+
+/** Posture colours the ladder, never the name. The name is plain text. */
+function postureTone(posture: string) {
+  switch (posture) {
+    case "prod":
+      return "fault" as const;
+    case "staging":
+      return "late" as const;
+    case "dev":
+      return "neutral" as const;
+    default:
+      return "hatched" as const;
+  }
+}
+
+/**
+ * One rung, one row. The sentence each cell used to carry is its title, so a
+ * hover still says why "none" means NO PACKAGE AT ALL, not "latest".
+ */
+function RungRow({
+  env,
+  instances,
+  index,
+  reports,
+  applied,
+  offer,
+  onEdit,
+  onRemove,
+  onPromote,
+  onApply,
+  onHold,
+}: {
+  env: EnvironmentResp;
+  instances: InstanceVersion[] | null;
+  index: ProjectIndex;
+  reports: ReportSource;
+  applied: AppliedSource;
+  /** The newest promotion into this rung when it is not applied yet. */
+  offer: PromotionResp | null;
+  /** All of these act on `env.project` — the rung's OWN project, never the page's. */
+  onEdit: (env: EnvironmentResp) => void;
+  onRemove: (env: EnvironmentResp) => void;
+  onPromote: (env: EnvironmentResp) => void;
+  onApply: (env: EnvironmentResp, offer: PromotionResp) => void;
+  onHold: (env: EnvironmentResp) => void;
+}) {
+  const rung = readRung(env);
+  const placement = readPlacement(env, instances);
+  const held = stateFor(applied, env.project, env.name)?.hold ?? null;
+  return (
+    <TableRow hover>
+      <TableCell sx={{ fontFamily: "monospace", fontWeight: 700 }} title={rung.nameNote}>
+        {env.name}
+      </TableCell>
+      <TableCell>
+        <ToneChip label={env.posture || "none"} tone={postureTone(env.posture)} />
+      </TableCell>
+      <TableCell>
+        <LocationCell index={index} project={env.project} />
+      </TableCell>
+      <TableCell sx={{ fontFamily: "monospace" }}>{env.from || "—"}</TableCell>
+      <TableCell sx={{ fontFamily: "monospace" }} title={rung.versionNote}>
+        {env.version || (
+          <Typography component="span" variant="body2" sx={{ color: "warning.main" }}>
+            none — installs nothing
+          </Typography>
+        )}
+      </TableCell>
+      <TableCell>
+        <ReportedCell source={reports} env={env} />
+      </TableCell>
+      <TableCell>
+        <AppliedCell source={applied} env={env} />
+      </TableCell>
+      <TableCell>
+        <HoldCell source={applied} env={env} />
+      </TableCell>
+      <TableCell title={placement.meaning}>
+        <ToneChip
+          label={placement.headline}
+          tone={placement.tone}
+          hatched={placement.knowledge === "unknown"}
+          dashed={placement.knowledge === "unknown"}
+        />
+      </TableCell>
+      <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
+        {env.from ? (
+          <IconButton
+            size="small"
+            aria-label={`Promote ${env.project}/${env.from} → ${env.name}…`}
+            title={`Promote ${env.project}/${env.from} → ${env.name}… (refused unless ${env.from} reported the version)`}
+            onClick={() => onPromote(env)}
+            sx={{ color: "text.secondary" }}
+          >
+            <UpgradeIcon fontSize="small" />
+          </IconButton>
+        ) : null}
+        {offer ? (
+          <IconButton
+            size="small"
+            aria-label={`Apply ${offer.version} to ${env.project}/${env.name}…`}
+            title={`Apply ${offer.version} to ${env.project}/${env.name}… — its newest promotion, not applied yet`}
+            onClick={() => onApply(env, offer)}
+            sx={{ color: "primary.main" }}
+          >
+            <PlayArrowOutlinedIcon fontSize="small" />
+          </IconButton>
+        ) : null}
+        {applied.known ? (
+          <IconButton
+            size="small"
+            aria-label={`${held ? "Unhold" : "Hold"} ${env.project}/${env.name}…`}
+            title={held ? `Unhold ${env.project}/${env.name}… (held: ${held.reason})` : `Hold ${env.project}/${env.name}… — an emergency stop on top of the apply`}
+            onClick={() => onHold(env)}
+            sx={{ color: held ? "warning.main" : "text.secondary" }}
+          >
+            <PanToolOutlinedIcon fontSize="small" />
+          </IconButton>
+        ) : null}
+        <IconButton
+          size="small"
+          aria-label={`Edit ${env.project}/${env.name}…`}
+          title={`Edit ${env.project}/${env.name}…`}
+          onClick={() => onEdit(env)}
+          sx={{ color: "text.secondary" }}
+        >
+          <EditOutlinedIcon fontSize="small" />
+        </IconButton>
+        <IconButton
+          size="small"
+          aria-label={`Remove ${env.project}/${env.name}…`}
+          title={`Remove ${env.project}/${env.name}… (shows what it would take first)`}
+          onClick={() => onRemove(env)}
+          sx={{ color: "text.secondary" }}
+        >
+          <DeleteOutlineIcon fontSize="small" />
+        </IconButton>
+      </TableCell>
+    </TableRow>
+  );
+}
+
+/** Where this project sits, in one line: its parent and its subprojects. */
+function ProjectHeader({ route, index }: { route: ProjectRoute; index: ProjectIndex }) {
+  const children = route.children
+    .map((name) => index.byName.get(name))
+    .filter((r): r is ProjectRoute => r !== undefined);
+  const parent = route.parent ? index.byName.get(route.parent) : undefined;
+  if (!parent && children.length === 0) return null;
+  return (
+    <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap", mb: 2, alignItems: "center" }}>
+      {parent ? (
+        <Typography variant="body2" sx={{ color: "text.secondary", mr: 1 }}>
+          child of <ProjectLink index={index} route={parent} />
+        </Typography>
+      ) : null}
+      {children.length > 0 ? (
+        <>
+          <Typography variant="body2" sx={{ color: "text.secondary" }}>
+            subprojects:
+          </Typography>
+          {children.map((c) => (
+            <Link
+              key={c.name}
+              to="/p/$project"
+              params={{ project: c.name }}
+              search={{}}
+              style={{ textDecoration: "none" }}
+            >
+              <Chip
+                size="small"
+                variant="outlined"
+                label={c.name}
+                sx={{ fontFamily: "monospace", cursor: "pointer" }}
+              />
+            </Link>
+          ))}
+        </>
+      ) : null}
+    </Box>
+  );
+}
+
+function ProjectOverview() {
+  const { index, resolution, scope, param } = useProjectContext();
+  const environments = useEnvironments();
+  const services = useServices();
+  const drift = useVersionDrift();
+  const navigate = useNavigate();
+  // "+" always declares into THIS page's own project (never a descendant
+  // merely visible under the own+descendants scope); edit/remove act on
+  // whichever project the targeted rung actually belongs to.
+  const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<EnvironmentResp | null>(null);
+  const [removing, setRemoving] = useState<EnvironmentResp | null>(null);
+  const [promoting, setPromoting] = useState<EnvironmentResp | null>(null);
+  const [applying, setApplying] = useState<{ env: EnvironmentResp; offer: PromotionResp } | null>(null);
+  const [holding, setHolding] = useState<EnvironmentResp | null>(null);
+  const [addingNested, setAddingNested] = useState(false);
+  const instancesQ = useInstances();
+  const deploys = useLatestDeploys();
+  const promotions = usePromotions();
+  const appliedQ = useAppliedState();
+  const artifacts = useArtifacts();
+  const lines = useProjectLines(resolution.found ? resolution.route.name : "");
+
+  // The layout above renders the no-such-project screen and no <Outlet/>, so
+  // this component only ever runs with a resolved project.
+  if (!resolution.found) return null;
+  const route = resolution.route;
+  const reading = scopeOf(route, scope);
+
+  const rungs = (environments.data ?? []).filter((e) => inScope(reading.names, e.project));
+  const ownRungs = (environments.data ?? []).filter((e) => e.project === route.name);
+  const editingSiblings = (environments.data ?? []).filter((e) => e.project === editing?.project);
+  const mine = (services.data ?? []).filter((s) => inScope(reading.names, s.project));
+  // Not [] while unanswered: "nothing reported" and "could not ask" differ.
+  const reports: ReportSource = deploys.data
+    ? { known: true, reports: deploys.data }
+    : deploys.error
+      ? { known: false, loading: false, why: deploys.error.message }
+      : { known: false, loading: true };
+  const promotionRows = promotions.data
+    ?.filter((p) => inScope(reading.names, p.project))
+    .slice(0, 10);
+  const applied: AppliedSource = appliedQ.data
+    ? { known: true, rungs: appliedQ.data }
+    : appliedQ.error
+      ? { known: false, loading: false, why: appliedQ.error.message }
+      : { known: false, loading: true };
+  const appliedIds = appliedQ.data
+    ? new Set(appliedQ.data.flatMap((r) => (r.applied ? [r.applied.promotion_id] : [])))
+    : undefined;
+  const deletedArtifacts = artifacts.data
+    ? new Map(artifacts.data.filter((a) => a.deleted_at).map((a) => [a.sha256, a.deleted_at ?? ""]))
+    : undefined;
+
+  // null, deliberately, and not []: hz has not answered, which is a different
+  // answer from "nothing is placed" (invariant 2).
+  const source = readInstanceSource(drift, "The placement column below");
+  const instances: InstanceVersion[] | null = source.known ? source.instances : null;
+  const feed = readFeed(route.project);
+  const resolvedFeed = route.project.resolvedFeed;
+  const addEnv = (
+    <AddButton
+      label="Add environment"
+      ariaLabel={`Add an environment to ${route.name}`}
+      onClick={() => setAdding(true)}
+    />
+  );
+  const addService = (
+    <AddButton
+      label="Add service"
+      onClick={() => navigate({ to: "/p/$project/services", params: { project: param }, search: {} })}
+    />
+  );
+
+  return (
+    <Box>
+      <ProjectHeader route={route} index={index} />
+      <ScopeControl reading={reading} to="/p/$project" param={param} />
+
+      {source.known ? null : <CannotAskBanner what={source.what} detail={source.detail} />}
+      {source.known && source.unadmitted > 0 ? (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          {source.unadmitted} registration{source.unadmitted === 1 ? "" : "s"} waiting for approval
+          —{" "}
+          <Link to={CONFIG_AT} params={{ project: param }} search={{}}>
+            review in Config
+          </Link>
+          .
+        </Alert>
+      ) : null}
+
+      <Box sx={{ display: "flex", gap: 1, alignItems: "center", flexWrap: "wrap", mb: 3 }}>
+        <Typography variant="body2" sx={{ fontWeight: 700 }}>
+          Package feed
+        </Typography>
+        <ToneChip label={feed.headline} tone={feed.tone} />
+        {resolvedFeed ? (
+          <Typography variant="body2" sx={{ fontFamily: "monospace", color: "text.secondary" }} title={feed.meaning}>
+            {resolvedFeed.url} {resolvedFeed.suite}/{resolvedFeed.component}
+            {resolvedFeed.keyId ? ` · key ${resolvedFeed.keyId}` : " · unsigned"}
+          </Typography>
+        ) : null}
+      </Box>
+
+      <TabHeader title="Environments" action={addEnv} />
+      {environments.error ? (
+        <Alert severity="error" sx={{ mb: 3 }}>
+          hz could not be asked which environments it declares: {environments.error.message}
+        </Alert>
+      ) : environments.isLoading ? (
+        <Typography sx={{ color: "text.secondary", mb: 3 }}>Asking hz which environments it declares…</Typography>
+      ) : rungs.length === 0 ? (
+        <Box sx={{ mb: 3 }}>
+          <EmptyRow text={`No environments in ${route.name}.`} action={addEnv} />
+        </Box>
+      ) : (
+        <TableContainer component={Paper} sx={{ mb: 3 }}>
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>Environment</TableCell>
+                <TableCell>Posture</TableCell>
+                <TableCell>{LOCATION_COLUMN_LABEL}</TableCell>
+                <TableCell>From</TableCell>
+                <TableCell>Version</TableCell>
+                <TableCell>Reported</TableCell>
+                <TableCell>Applied</TableCell>
+                <TableCell>Hold</TableCell>
+                <TableCell>Placement</TableCell>
+                <TableCell />
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {[...rungs]
+                .sort((a, b) => a.project.localeCompare(b.project) || a.name.localeCompare(b.name))
+                .map((e) => (
+                  <RungRow
+                    key={`${e.project}/${e.name}`}
+                    env={e}
+                    instances={instances}
+                    index={index}
+                    reports={reports}
+                    applied={applied}
+                    offer={applyOffer(applied, promotions.data, e)}
+                    onEdit={setEditing}
+                    onRemove={setRemoving}
+                    onPromote={setPromoting}
+                    onApply={(env, offer) => setApplying({ env, offer })}
+                    onHold={setHolding}
+                  />
+                ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
+
+      <NestedInstancesSection
+        project={route.name}
+        instances={{ rows: instancesQ.data, error: instancesQ.error?.message, loading: instancesQ.isLoading }}
+        environments={environments.data ?? []}
+        onAdd={() => setAddingNested(true)}
+      />
+
+      {rungs.length > 0 ? (
+        <>
+          <TabHeader title="Recent promotions" />
+          <RecentPromotions
+            promotions={promotionRows}
+            error={promotions.error}
+            loading={promotions.isLoading}
+            project={route.name}
+            applied={appliedIds}
+            deleted={deletedArtifacts}
+          />
+        </>
+      ) : null}
+
+      {ownRungs.length > 0 ? (
+        <>
+          {/* This project's own rungs only: lines, kept backups and pins are per project. */}
+          <TabHeader title="Release lines" />
+          <ReleaseLinesTable
+            lines={lines.data}
+            error={lines.error}
+            loading={lines.isLoading}
+            project={route.name}
+          />
+        </>
+      ) : null}
+
+      <TabHeader title="Services" action={addService} />
+      {services.error ? (
+        <Alert severity="error">hz could not be asked which services it serves: {services.error.message}</Alert>
+      ) : services.isLoading ? (
+        <Typography sx={{ color: "text.secondary" }}>Asking hz which services it serves…</Typography>
+      ) : mine.length === 0 ? (
+        <EmptyRow text={`No services in ${route.name}.`} action={addService} />
+      ) : (
+        <TableContainer component={Paper}>
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>Service</TableCell>
+                <TableCell>{LOCATION_COLUMN_LABEL}</TableCell>
+                <TableCell>Domains</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {mine.map((s) => (
+                <TableRow key={s.name} hover>
+                  <TableCell sx={{ fontFamily: "monospace", fontWeight: 600 }}>{s.name}</TableCell>
+                  <TableCell>
+                    <LocationCell index={index} project={s.project} />
+                  </TableCell>
+                  <TableCell sx={{ color: "text.secondary" }}>{s.domains.join(" · ")}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
+
+      <AddEnvironmentDialog
+        open={adding}
+        project={route.name}
+        siblings={ownRungs}
+        onClose={() => setAdding(false)}
+      />
+      <AddNestedInstanceDialog
+        open={addingNested}
+        project={route.name}
+        rungs={ownRungs.filter((e) => !e.upstream)}
+        onClose={() => setAddingNested(false)}
+      />
+      <EditEnvironmentDialog env={editing} siblings={editingSiblings} onClose={() => setEditing(null)} />
+      <RemoveEnvironmentDialog target={removing} onClose={() => setRemoving(null)} />
+      <PromoteDialog
+        env={promoting}
+        sourceReport={promoting?.from ? reportFor(reports, promoting.project, promoting.from) : null}
+        onClose={() => setPromoting(null)}
+      />
+      <ApplyDialog env={applying?.env ?? null} offer={applying?.offer ?? null} onClose={() => setApplying(null)} />
+      <HoldDialog
+        env={holding}
+        held={holding ? (stateFor(applied, holding.project, holding.name)?.hold ?? null) : null}
+        onClose={() => setHolding(null)}
+      />
+    </Box>
+  );
+}
+
+export const Route = createFileRoute("/p/$project/")({
+  component: ProjectOverview,
+});

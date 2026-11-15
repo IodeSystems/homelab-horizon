@@ -1,5 +1,5 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { Link, createFileRoute } from "@tanstack/react-router";
+import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Box,
@@ -34,12 +34,20 @@ import {
   useAllCheckHistory,
   useChecks,
   useDeleteCheck,
+  useProbeDiagnosis,
+  useProjects,
   useRunCheck,
   useToggleCheck,
 } from "../api/hooks";
-import type { CheckStatus } from "../api/types";
+import type { CheckStatus, ProbeDiagnosis } from "../api/types";
+import { CheckStatusFilter, filterByStatus, noneWithStatus, parseStatusParam } from "../components/CheckFilter";
+import { CheckId, checkAnchor } from "../components/CheckId";
 import { ChecksHistory } from "../components/ChecksHistory";
 import { RemoteVantages } from "../components/RemoteVantages";
+import { EdgeDiagnosis, deviceLabel } from "../components/EdgeDiagnosis";
+import { buildProjectIndex } from "../components/model/projectRoutes.ts";
+import { PROJECT_COLUMN_LABEL } from "../components/model/ProjectBits";
+import { LocationCell } from "../components/model/ProjectBits";
 
 function relativeTime(isoStr: string): string {
   if (!isoStr) return "Never";
@@ -56,7 +64,7 @@ function relativeTime(isoStr: string): string {
   return `${days}d ago`;
 }
 
-function StatusDot({ status }: { status: string }) {
+export function StatusDot({ status }: { status: string }) {
   const color =
     status === "ok"
       ? "success.main"
@@ -82,14 +90,37 @@ function StatusDot({ status }: { status: string }) {
 // top of the page now carries the history signal (up/down ribbon + latency
 // stacked). Expanding each row to see its own sparkline was redundant.
 
-function CheckRow({ check }: { check: CheckStatus }) {
+/**
+ * For a `svc:<name>` check, the service it follows; null for anything else.
+ * Its project is DERIVED from that service at response time, never stored on
+ * the check (`checkProjects`, `internal/server/handlers_api_settings.go`), so
+ * a row like this never carries its own project attribution.
+ */
+export function svcFollows(name: string): string | null {
+  return name.startsWith("svc:") ? name.slice(4) : null;
+}
+
+// A remote check row carries the cause of its own failure, when the edge
+// diagnosis has one for it. The row says a probe failed; the cause says on
+// whose device, and an operator scanning the table should not have to work out
+// that the panel above is about this line.
+function CheckRow({
+  check,
+  cause,
+  projectIndex,
+}: {
+  check: CheckStatus;
+  cause?: ProbeDiagnosis;
+  projectIndex: ReturnType<typeof buildProjectIndex>;
+}) {
   const toggleCheck = useToggleCheck();
   const deleteCheck = useDeleteCheck();
   const runCheck = useRunCheck();
+  const follows = svcFollows(check.name);
 
   return (
     <>
-      <TableRow hover>
+      <TableRow hover id={checkAnchor(check.name)} sx={{ scrollMarginTop: 80 }}>
         <TableCell>
           <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
             <Typography variant="body2" sx={{ fontWeight: 500 }}>
@@ -109,7 +140,18 @@ function CheckRow({ check }: { check: CheckStatus }) {
                 />
               </Tooltip>
             )}
+            {follows && (
+              <Tooltip title={`Follows service ${follows} — its project is the service's, not its own.`}>
+                <Chip
+                  label={`follows ${follows}`}
+                  size="small"
+                  variant="outlined"
+                  sx={{ ml: 0.5, height: 20, fontSize: "0.7rem" }}
+                />
+              </Tooltip>
+            )}
           </Box>
+          <CheckId id={check.name} />
         </TableCell>
         <TableCell>
           <Chip
@@ -134,6 +176,19 @@ function CheckRow({ check }: { check: CheckStatus }) {
               {check.last_error}
             </Typography>
           )}
+          {cause && cause.status !== "ok" && (
+            <Tooltip title={`${cause.summary} — ${deviceLabel(cause.device)}. See "What is wrong at the edge" above.`}>
+              <Chip
+                size="small"
+                variant="outlined"
+                label={cause.cause}
+                sx={{ mt: 0.5, height: 20, fontSize: "0.7rem" }}
+              />
+            </Tooltip>
+          )}
+        </TableCell>
+        <TableCell>
+          <LocationCell project={check.project} index={projectIndex} />
         </TableCell>
         <TableCell>
           <Typography variant="body2" color="text.secondary">
@@ -188,99 +243,54 @@ function CheckRow({ check }: { check: CheckStatus }) {
   );
 }
 
-function ChecksPage() {
-  const { data: checks, isLoading, error } = useChecks();
-  const { data: allHistory } = useAllCheckHistory();
-  const [addOpen, setAddOpen] = useState(false);
-  const [snack, setSnack] = useState("");
+/**
+ * The Add Check dialog, shared by `/checks` (unscoped) and a project's Checks
+ * tab (amendment 6: the empty tab offers [Add check] and the modal does the
+ * rest). `project` fixes the attribution and hides the picker when the caller
+ * already knows it — the project tab always passes it; the unscoped screen
+ * does not, and offers the picker instead, defaulting to global.
+ */
+export function AddCheckDialog({
+  project,
+  onClose,
+}: {
+  project?: string;
+  onClose: () => void;
+}) {
   const addCheck = useAddCheck();
+  const projectsQuery = useProjects();
+  const [snack, setSnack] = useState("");
   const [form, setForm] = useState({
     name: "",
     type: "ping",
     target: "",
     interval: 300,
+    project: project ?? "",
   });
 
-  if (isLoading) {
-    return (
-      <Box sx={{ display: "flex", justifyContent: "center", pt: 8 }}>
-        <CircularProgress />
-      </Box>
+  const fixed = project !== undefined;
+  const submit = () => {
+    addCheck.mutate(
+      {
+        name: form.name,
+        type: form.type,
+        target: form.target,
+        interval: form.interval,
+        project: (fixed ? project : form.project) || undefined,
+      },
+      {
+        onSuccess: onClose,
+        onError: (err) => setSnack(err.message),
+      },
     );
-  }
-
-  if (error) {
-    return <Alert severity="error">Failed to load checks: {error.message}</Alert>;
-  }
-
-  const checksList = checks ?? [];
-  const healthy = checksList.filter((c) => c.status === "ok").length;
-  const failed = checksList.filter((c) => c.status === "failed").length;
-  const warning = checksList.filter((c) => c.status === "warning").length;
-  const total = checksList.length;
-  const vantages = new Set(
-    checksList.map((c) => c.vantage).filter((v): v is string => !!v),
-  );
+  };
 
   return (
-    <Box>
-      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 3 }}>
-        <Box>
-          <Typography variant="h5" sx={{ fontWeight: 600 }}>
-            Health Checks
-          </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-            {healthy} healthy, {warning > 0 ? `${warning} warning, ` : ""}
-            {failed} failed, {total} total
-            {vantages.size > 0 &&
-              ` · ${vantages.size} outside vantage${vantages.size > 1 ? "s" : ""}`}
-          </Typography>
-        </Box>
-        <Button
-          variant="contained"
-          startIcon={<AddIcon />}
-          onClick={() => setAddOpen(true)}
-        >
-          Add Check
-        </Button>
-      </Box>
-
-      <ChecksHistory data={allHistory} />
-
-      <RemoteVantages />
-
-      <TableContainer component={Paper}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Name</TableCell>
-              <TableCell>Type</TableCell>
-              <TableCell>Target</TableCell>
-              <TableCell>Status</TableCell>
-              <TableCell>Last Check</TableCell>
-              <TableCell>Interval</TableCell>
-              <TableCell>Actions</TableCell>
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {checksList.map((check) => (
-              <CheckRow key={check.name} check={check} />
-            ))}
-            {checksList.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={7} align="center">
-                  <Typography variant="body2" color="text.secondary" sx={{ py: 4 }}>
-                    No health checks configured
-                  </Typography>
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </TableContainer>
-
-      <Dialog open={addOpen} onClose={() => setAddOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Add Health Check</DialogTitle>
+    <>
+      <Dialog open onClose={onClose} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          {fixed ? `Add check to ${project || "global"}` : "Add Health Check"}
+        </DialogTitle>
         <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, pt: "8px !important" }}>
           <TextField
             label="Name"
@@ -314,38 +324,187 @@ function ChecksPage() {
               setForm({ ...form, interval: parseInt(e.target.value) || 300 })
             }
           />
+          {!fixed && (
+            <TextField
+              label="Project"
+              size="small"
+              select
+              value={form.project}
+              onChange={(e) => setForm({ ...form, project: e.target.value })}
+              helperText="Declared projects only. Global is the default — attributed to no project."
+            >
+              <MenuItem value="">
+                <em>global</em>
+              </MenuItem>
+              {(projectsQuery.data ?? []).map((p) => (
+                <MenuItem key={p.name} value={p.name}>
+                  {p.name}
+                </MenuItem>
+              ))}
+            </TextField>
+          )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setAddOpen(false)}>Cancel</Button>
+          <Button onClick={onClose}>Cancel</Button>
           <Button
             variant="contained"
-            disabled={!form.name || !form.target}
-            onClick={() => {
-              addCheck.mutate(form, {
-                onSuccess: () => {
-                  setAddOpen(false);
-                  setForm({ name: "", type: "ping", target: "", interval: 300 });
-                  setSnack("Check added");
-                },
-                onError: (err) => setSnack(err.message),
-              });
-            }}
+            disabled={!form.name || !form.target || addCheck.isPending}
+            onClick={submit}
           >
-            Add
+            {addCheck.isPending ? <CircularProgress size={20} /> : "Add"}
           </Button>
         </DialogActions>
       </Dialog>
-
       <Snackbar
         open={!!snack}
-        autoHideDuration={3000}
+        autoHideDuration={8000}
         onClose={() => setSnack("")}
         message={snack}
       />
+    </>
+  );
+}
+
+function ChecksPage() {
+  const { status } = Route.useSearch();
+  const { data: checks, isLoading, error } = useChecks();
+  const { data: allHistory } = useAllCheckHistory();
+  // Same query key the panel uses, so this costs no extra request.
+  const { data: diagnosis } = useProbeDiagnosis();
+  const projectsQuery = useProjects();
+  const projectIndex = useMemo(
+    () => buildProjectIndex(projectsQuery.data ?? []),
+    [projectsQuery.data],
+  );
+  const [addOpen, setAddOpen] = useState(false);
+
+  // `/checks#check-<id>` lands on that check's row once the list has loaded.
+  useEffect(() => {
+    if (!checks || typeof window === "undefined" || !window.location.hash) return;
+    const el = document.getElementById(decodeURIComponent(window.location.hash.slice(1)));
+    el?.scrollIntoView({ block: "center" });
+  }, [checks]);
+
+  if (isLoading) {
+    return (
+      <Box sx={{ display: "flex", justifyContent: "center", pt: 8 }}>
+        <CircularProgress />
+      </Box>
+    );
+  }
+
+  if (error) {
+    return <Alert severity="error">Failed to load checks: {error.message}</Alert>;
+  }
+
+  const checksList = checks ?? [];
+  const shown = filterByStatus(checksList, status);
+  // Keyed by vantage and host: a diagnosis is per name, and a name has one row
+  // per probe kind, so all of a name's rows share its cause.
+  const causeFor = new Map(
+    (diagnosis?.diagnoses ?? []).map((d) => [`${d.vantage}:${d.host}`, d]),
+  );
+  const healthy = checksList.filter((c) => c.status === "ok").length;
+  const failed = checksList.filter((c) => c.status === "failed").length;
+  const warning = checksList.filter((c) => c.status === "warning").length;
+  const total = checksList.length;
+  const vantages = new Set(
+    checksList.map((c) => c.vantage).filter((v): v is string => !!v),
+  );
+
+  return (
+    <Box>
+      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 3 }}>
+        <Box>
+          <Typography variant="h5" sx={{ fontWeight: 600 }}>
+            Health Checks
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+            {healthy} healthy, {warning > 0 ? `${warning} warning, ` : ""}
+            {failed} failed, {total} total
+            {vantages.size > 0 &&
+              ` · ${vantages.size} outside vantage${vantages.size > 1 ? "s" : ""}`}
+          </Typography>
+        </Box>
+        <Button
+          variant="contained"
+          startIcon={<AddIcon />}
+          onClick={() => setAddOpen(true)}
+        >
+          Add Check
+        </Button>
+      </Box>
+
+      {addOpen && <AddCheckDialog onClose={() => setAddOpen(false)} />}
+
+      <ChecksHistory data={allHistory} />
+
+      {/* Causes before statuses. The table below says which probes failed;
+          this says why and on whose device, which is the only one of the two
+          an operator can act on. */}
+      <EdgeDiagnosis />
+
+      <RemoteVantages />
+
+      <CheckStatusFilter
+        rows={checksList}
+        active={status}
+        linkTo={(st, chip) => (
+          <Link to="/checks" search={st ? { status: st } : {}} style={{ textDecoration: "none" }}>
+            {chip}
+          </Link>
+        )}
+      />
+
+      <TableContainer component={Paper}>
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell>Name</TableCell>
+              <TableCell>Type</TableCell>
+              <TableCell>Target</TableCell>
+              <TableCell>Status</TableCell>
+              <TableCell>{PROJECT_COLUMN_LABEL}</TableCell>
+              <TableCell>Last Check</TableCell>
+              <TableCell>Interval</TableCell>
+              <TableCell>Actions</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {shown.map((check) => (
+              <CheckRow
+                key={check.name}
+                check={check}
+                cause={
+                  check.vantage
+                    ? causeFor.get(`${check.vantage}:${check.target}`)
+                    : undefined
+                }
+                projectIndex={projectIndex}
+              />
+            ))}
+            {shown.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={8} align="center">
+                  <Typography variant="body2" color="text.secondary" sx={{ py: 4 }} data-checks-empty>
+                    {checksList.length === 0 || status === undefined
+                      ? "No health checks configured"
+                      : noneWithStatus(status)}
+                  </Typography>
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </TableContainer>
     </Box>
   );
 }
 
 export const Route = createFileRoute("/checks")({
   component: ChecksPage,
+  validateSearch: (search: Record<string, unknown>): { status?: string } => {
+    const status = parseStatusParam(search.status);
+    return status === undefined ? {} : { status };
+  },
 });

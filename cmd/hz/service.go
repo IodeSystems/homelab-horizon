@@ -4,15 +4,17 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 )
 
 func runService(c *client, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("service subcommand required: list | show | create | edit | delete")
+		return fmt.Errorf("service subcommand required: list | show | create | edit | assign | unassign | delete")
 	}
 	sub := args[0]
 	rest := args[1:]
@@ -25,6 +27,10 @@ func runService(c *client, args []string) error {
 		return serviceCreate(c, rest)
 	case "edit", "update":
 		return serviceEdit(c, rest)
+	case "assign":
+		return serviceAssign(c, rest)
+	case "unassign":
+		return serviceUnassign(c, rest)
 	case "delete", "rm", "remove":
 		return serviceDelete(c, rest)
 	default:
@@ -136,6 +142,11 @@ func serviceShow(c *client, args []string) error {
 	}
 	fmt.Printf("Name:     %s\n", svc.Name)
 	fmt.Printf("Domains:  %s\n", strings.Join(svc.Domains, ", "))
+	// Printed always, including when there is none: the read surface has carried
+	// the assignment since projects landed and this screen never showed it, so a
+	// service that WAS assigned looked identical to one that was not. "none" is
+	// an answer; a missing line is a question.
+	fmt.Printf("Project:  %s\n", assignmentLine(svc.Project, svc.Environment))
 	if svc.InternalDNS != nil {
 		fmt.Printf("InternalDNS: %s\n", svc.InternalDNS.IP)
 	}
@@ -283,7 +294,7 @@ func newServiceFlags(name string) *serviceFlags {
 	f.Var(&sf.httpsDomains, "domain-https", "domain served over HTTPS (repeatable); also added to the service")
 	f.StringVar(&sf.httpsCSV, "domains-https", "", "comma-separated HTTPS domains")
 	f.BoolVar(&sf.confirm, "confirm", false, "allow changing the HTTPS state of domains that already exist")
-	f.StringVar(&sf.backend, "backend", "", "proxy backend host:port")
+	f.StringVar(&sf.backend, "backend", "", "proxy backend host:port (@<host> or @self resolves a declared/own address)")
 	f.StringVar(&sf.staticRoot, "static-root", "", "static folder to serve")
 	f.BoolVar(&sf.static, "static", false, "serve an hz-managed static folder (auto path when --static-root omitted)")
 	f.BoolVar(&sf.self, "self", false, "route to hz's own admin UI")
@@ -291,9 +302,9 @@ func newServiceFlags(name string) *serviceFlags {
 	f.BoolVar(&sf.internal, "internal-only", false, "not publicly reachable")
 	f.BoolVar(&sf.public, "public", false, "publicly reachable")
 	f.StringVar(&sf.healthCheck, "health-check", "", "backend health-check path")
-	f.StringVar(&sf.deployNext, "deploy-next-backend", "", "standby backend host:port (blue-green)")
+	f.StringVar(&sf.deployNext, "deploy-next-backend", "", "standby backend host:port (blue-green); @<host>:<port> also works")
 	f.StringVar(&sf.balance, "balance", "", "first | roundrobin")
-	f.StringVar(&sf.intDNSIP, "internal-dns-ip", "", "internal (dnsmasq) A record IP")
+	f.StringVar(&sf.intDNSIP, "internal-dns-ip", "", "internal (dnsmasq) A record IP; @<host> or @self resolves one")
 	f.Var(&sf.extDNSIP, "external-dns-ip", "external A record IP (repeatable)")
 	f.BoolVar(&sf.dormant, "dormant", false, "reserved slot: keep the name, certificate and proxy entry, expect nothing behind them")
 	f.StringVar(&sf.dormantReason, "dormant-reason", "", "why this slot is parked")
@@ -302,7 +313,7 @@ func newServiceFlags(name string) *serviceFlags {
 	f.IntVar(&sf.tServer, "timeout-server", 0, "HAProxy server timeout override (s)")
 	f.IntVar(&sf.tTunnel, "timeout-tunnel", 0, "HAProxy tunnel timeout override (s)")
 	f.Var(&sf.publicPaths, "public-path", "path prefix reachable from anywhere despite --internal-only (repeatable)")
-	f.StringVar(&sf.backendProto, "backend-proto", "", `protocol to the backend: "" (HTTP/1.1) or "h2" (cleartext HTTP/2, for gRPC backends)`)
+	f.StringVar(&sf.backendProto, "backend-proto", "", `protocol to the backend: "" (HTTP/1.1), "h2" (cleartext HTTP/2, for gRPC backends) or "https" (HTTP/1.1 over TLS; the backend's certificate is NOT verified — for a LAN device with a self-signed cert)`)
 	f.BoolVar(&sf.metrics, "metrics", false, "enable Prometheus metrics discovery for this service")
 	f.StringVar(&sf.metricsPath, "metrics-path", "", "metrics path to scrape (default /metrics)")
 	f.StringVar(&sf.metricsBearer, "metrics-bearer", "", "optional bearer token for probing/scraping metrics")
@@ -375,8 +386,19 @@ func (sf *serviceFlags) withHTTPSDomains(base []string) []string {
 // --domains-https list means "these over HTTPS, the difference over HTTP").
 func (sf *serviceFlags) desiredHTTPS(domains []string) map[string]bool {
 	want := make(map[string]bool, len(domains))
-	for _, d := range domains {
-		want[d] = sf.https
+	switch {
+	case sf.set["https"]:
+		for _, d := range domains {
+			want[d] = sf.https
+		}
+	default:
+		// Only a domain this command names has an intent. One the edit kept
+		// from the service is left out, so its coverage stays as it is:
+		// `--domain-https new.example.com` used to plan every other domain of
+		// the service to plain HTTP — on 2026-10-30, four production names.
+		for _, d := range sf.allDomains() {
+			want[d] = false
+		}
 	}
 	for _, d := range sf.httpsList() {
 		want[d] = true
@@ -469,10 +491,12 @@ func serviceCreate(c *client, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := c.do("POST", "/api/v1/services/add", req, nil); err != nil {
+	var created apitypes.ServiceAddResp
+	if err := c.do("POST", "/api/v1/services/add", req, &created); err != nil {
 		return err
 	}
 	fmt.Printf("Created service %q.\n", req.Name)
+	printServiceSnippet(req.Name, created.ServiceIntegration)
 	if want != nil {
 		if err := applyHTTPS(c, req.Domains, want); err != nil {
 			return err
@@ -772,14 +796,21 @@ func runSync(c *client, args []string) error {
 		fmt.Println("Sync started.")
 	}
 	if !*wait {
+		c.syncRunning = true
 		return nil
 	}
 	return waitForSync(c)
 }
 
+// syncWaitLimit bounds `hz sync --wait`. A sync that issues a certificate
+// stages and cleans one DNS-01 TXT record per name, about 30s each at Route53,
+// so a 7-name cert alone took 9m6s on 2026-10-30 — the old 120s limit gave up
+// on a sync that went on to succeed.
+const syncWaitLimit = 30 * time.Minute
+
 func waitForSync(c *client) error {
-	fmt.Print("Waiting for sync")
-	for i := 0; i < 120; i++ {
+	fmt.Print("Waiting for sync (a certificate takes about a minute per name)")
+	for waited := time.Duration(0); waited < syncWaitLimit; waited += time.Second {
 		var st struct {
 			Running bool `json:"running"`
 		}
@@ -791,11 +822,57 @@ func waitForSync(c *client) error {
 			fmt.Println(" done.")
 			return nil
 		}
-		fmt.Print(".")
+		if waited%(10*time.Second) == 0 {
+			fmt.Print(".")
+		}
 		sleep1s()
 	}
 	fmt.Println()
-	return fmt.Errorf("sync still running after 120s")
+	return fmt.Errorf("sync still running after %s; it goes on on the server — 'hz sync --wait' again to keep waiting", syncWaitLimit)
+}
+
+// reportPending ends a command that changed something by saying what is still
+// unpublished. Commands used to print "published" or "Service created." and
+// stop, and the operator learned from the UI that a sync was due — or that a
+// change they had just watched go live still read as pending there.
+//
+// Written to w (stderr from main) so stdout stays what the command printed.
+// A failure to read the list is reported, not fatal: the mutation happened.
+func reportPending(c *client, cmd string, w io.Writer) {
+	if !c.mutated || c.syncRunning || cmd == "pending" {
+		return
+	}
+	var pc apitypes.PendingChanges
+	if err := c.do("GET", "/api/v1/sync/pending", nil, &pc); err != nil {
+		_, _ = fmt.Fprintf(w, "Could not read pending changes: %v\n", err)
+		return
+	}
+	if !pc.HasPending {
+		_, _ = fmt.Fprintln(w, "Nothing pending.")
+		return
+	}
+	_, _ = fmt.Fprintf(w, "%d pending change(s) — run 'hz sync' to publish ('hz pending' for detail):\n", pc.Count)
+	sortPending(pc.Items)
+	for _, it := range pc.Items {
+		fields := make([]string, 0, len(it.Fields))
+		for _, f := range it.Fields {
+			fields = append(fields, f.Path)
+		}
+		line := fmt.Sprintf("  %-8s %-8s %s", it.Change, it.Kind, it.Name)
+		if len(fields) > 0 {
+			line += " (" + strings.Join(fields, ", ") + ")"
+		}
+		_, _ = fmt.Fprintln(w, line)
+	}
+}
+
+func sortPending(items []apitypes.PendingItem) {
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Kind != items[j].Kind {
+			return items[i].Kind < items[j].Kind
+		}
+		return items[i].Name < items[j].Name
+	})
 }
 
 func runPending(c *client, _ []string) error {
@@ -808,12 +885,7 @@ func runPending(c *client, _ []string) error {
 		return nil
 	}
 	fmt.Printf("%d pending change(s):\n", pc.Count)
-	sort.Slice(pc.Items, func(i, j int) bool {
-		if pc.Items[i].Kind != pc.Items[j].Kind {
-			return pc.Items[i].Kind < pc.Items[j].Kind
-		}
-		return pc.Items[i].Name < pc.Items[j].Name
-	})
+	sortPending(pc.Items)
 	for _, it := range pc.Items {
 		fmt.Printf("  %-8s %-8s %s\n", it.Change, it.Kind, it.Name)
 		for _, f := range it.Fields {
@@ -822,4 +894,17 @@ func runPending(c *client, _ []string) error {
 	}
 	fmt.Println("\nRun 'hz sync' to publish.")
 	return nil
+}
+
+// printServiceSnippet prints the script that manages a new service. It holds
+// the service token; `hz service create` is admin-only, and the same token is
+// re-fetchable from the service's Integration panel.
+func printServiceSnippet(name string, in apitypes.ServiceIntegration) {
+	if in.Snippet == "" {
+		// An hz older than the create answer: say where the token is instead.
+		fmt.Printf("Token and hz-client script: the service's Integration panel (GET /api/v1/services/integration?name=%s).\n", name)
+		return
+	}
+	fmt.Println()
+	fmt.Print(in.Snippet)
 }

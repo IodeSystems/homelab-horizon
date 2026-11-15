@@ -33,7 +33,6 @@ func TestHZClientShapesMatchAPITypes(t *testing.T) {
 	assertSameShape(t, "deploy slot status", hzclient.DeploySlotStatus{}, apitypes.DeploySlotStatus{})
 	assertSameShape(t, "deploy status", hzclient.DeployStatus{}, apitypes.DeployStatus{})
 	assertSameShape(t, "deploy state change", hzclient.DeployStateChangeResponse{}, apitypes.DeployStateChangeResponse{})
-	assertSameShape(t, "deploy swap", hzclient.DeploySwapResponse{}, apitypes.DeploySwapResponse{})
 	assertSameShape(t, "ban request", hzclient.BanRequest{}, apitypes.BanRequest{})
 	assertSameShape(t, "unban request", hzclient.UnbanRequest{}, apitypes.UnbanRequest{})
 	assertSameShape(t, "ban entry", hzclient.BanEntry{}, apitypes.BanEntry{})

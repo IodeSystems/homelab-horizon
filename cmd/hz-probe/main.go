@@ -63,12 +63,23 @@ SERVE FLAGS
   --state PATH          target cache, so a restart keeps probing while hz is down
   --tls-cert PATH       TLS certificate (default /etc/hz-probe/cert.pem)
   --tls-key PATH        TLS key (default /etc/hz-probe/key.pem)
+  --ntfy-url-file PATH  ntfy topic URL to alert when this host cannot reach
+                        hz (default /etc/hz-probe/ntfy-url; absent = off).
+                        Push mode only: in pull mode the agent never dials hz
+                        and cannot see it down.
+  --ntfy-url URL        the URL inline; prefer --ntfy-url-file or HZ_PROBE_NTFY_URL
+  --ntfy-after N        consecutive failed reports before alerting (default 3)
+  --ntfy-token-file PATH  ntfy access token, sent as "Authorization: Bearer"
+                        (default /etc/hz-probe/ntfy-token; absent = no auth)
+  --ntfy-token TOK      the token inline; prefer --ntfy-token-file or
+                        HZ_PROBE_NTFY_TOKEN
 
 INSTALL FLAGS
   the serve flags, plus:
   --dry-run             print what install would do, change nothing
   --no-start            write and enable the unit, but do not start it
-  --no-auto-update      do not install the daily update timer
+  --no-auto-update      do not install the daily update timer or the
+                        update-on-report path unit
 
 UPDATE
   'update' asks hz which build it holds, and if it differs from the installed
@@ -77,8 +88,12 @@ UPDATE
   which is the point, since an agent that executed what hz sent it would turn
   a compromised hz into code execution out here.
 
-  install writes a daily timer that runs it. --no-auto-update skips that, and
-  you update by re-running the install command instead.
+  install writes a daily timer that runs it, and a path unit that runs it
+  when the agent has seen the same differing build on every report for 15
+  minutes (the agent writes update-wanted in its state directory; the flag
+  names nothing, and update asks hz for itself). At most one attempt an hour.
+  --no-auto-update skips both, and you update by re-running the install
+  command instead.
 
 GEN-CERT FLAGS
   --host IP-OR-NAME     what hz will connect to; repeatable (default: this host)
@@ -89,6 +104,17 @@ THE TOKEN
   Resolved in order: --token-file, HZ_PROBE_TOKEN, --token. A file and the
   environment both keep it off the process list. 'install' mints one if the
   file does not exist.
+
+VANTAGE-SIDE ALERTING
+  In push mode hz is the only notifier, so an outage that takes hz down
+  tells nobody. With an ntfy topic URL (resolved like the token: file,
+  HZ_PROBE_NTFY_URL, --ntfy-url) the agent posts once after --ntfy-after
+  failed reports, and once more when a report succeeds again. A report hz
+  answers with 401/403 is its own alert ("hz rejects this vantage": the token
+  was rotated or the vantage removed) and does not count as unreachable. An
+  ntfy access token (file, HZ_PROBE_NTFY_TOKEN, --ntfy-token) is optional.
+  The URL and token are secrets; install passes each as a systemd credential
+  when its file exists.
 
 SERVE TLS
   The token crosses the public internet on every poll. With a domain, use a

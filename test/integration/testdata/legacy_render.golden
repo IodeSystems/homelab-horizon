@@ -1,0 +1,143 @@
+=== haproxy.cfg ===
+global
+    log /dev/log local0
+    log /dev/log local1 notice
+    chroot /var/lib/haproxy
+    stats socket /run/haproxy/admin.sock mode 660 level admin
+    stats timeout 30s
+    user haproxy
+    group haproxy
+    daemon
+    ssl-default-bind-options ssl-min-ver TLSv1.2 no-tls-tickets
+    ssl-default-bind-ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384
+    ssl-default-bind-ciphersuites TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256
+
+
+# Cache configuration (RAM-based). total-max-size is in megabytes.
+cache mycache
+    total-max-size 64
+    max-object-size 524288
+
+defaults
+    log     global
+    mode    http
+    option  httplog
+    option  dontlognull
+    timeout connect 5000
+    timeout client  50000
+    timeout server  50000
+    errorfile 400 /etc/haproxy/errors/400.http
+    errorfile 403 /etc/haproxy/errors/403.http
+    errorfile 408 /etc/haproxy/errors/408.http
+    errorfile 500 /etc/haproxy/errors/500.http
+    errorfile 502 /etc/haproxy/errors/502.http
+    errorfile 503 /etc/haproxy/errors/503.http
+    errorfile 504 /etc/haproxy/errors/504.http
+
+# Stats page
+listen stats
+    bind *:8404
+    stats enable
+    stats uri /stats
+    stats refresh 10s
+    stats admin if LOCALHOST
+
+frontend http_front
+    bind *:80
+    mode http
+    option forwardfor
+    # Strip any client-supplied X-Forwarded-For before forwardfor adds the
+    # real one. forwardfor APPENDS, and hz trusts the FIRST entry of XFF
+    # when the connection comes from a proxy it trusts -- so without this
+    # a VPN peer can forge another peer's address and be authenticated as
+    # them, including as a VPN admin.
+    http-request del-header X-Forwarded-For
+    # Compression: gzip is a FALLBACK for backends that return raw responses. No 'offload' —
+    # that strips Accept-Encoding before the backend, forcing it to send raw so HAProxy re-gzips
+    # (and HAProxy only does gzip, never brotli). Without offload, Accept-Encoding reaches the
+    # backend, so a backend serving PRECOMPRESSED assets (its response already carries a
+    # Content-Encoding) passes straight through untouched — letting a brotli-precompressing
+    # backend (e.g. redline's webui) deliver brotli to clients instead of a mediocre re-gzip.
+    compression algo gzip
+    compression type text/html text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript image/svg+xml
+    # HAProxy LRU cache
+    http-request cache-use mycache
+    http-response cache-store mycache
+    # Router check endpoint - returns 200 OK directly (requires special header to avoid conflicts)
+    http-request return status 200 content-type "text/plain" string "OK" if { path /router-check } { hdr(X-Homelab-Horizon-Check) -m found }
+    # Local network access ACL (RFC1918 private ranges)
+    acl local_access src 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.0/8
+    acl host_files hdr_end(host) -i files.example.net
+    acl host_app hdr_end(host) -i app.example.net
+
+    http-request deny deny_status 403 if host_files !local_access
+    use_backend files_backend if host_files
+    use_backend app_backend if host_app
+
+backend files_backend
+    mode http
+    balance roundrobin
+    server files 192.168.1.160:445
+
+backend app_backend
+    mode http
+    balance first
+    option httpchk GET /health
+    http-check expect status 200
+    server next 192.168.1.160:8081 check inter 3s fall 2 rise 2
+    server current 192.168.1.160:8080 check inter 3s fall 2 rise 2
+
+
+=== dnsmasq records ===
+# DNS records served by homelab-horizon.
+# Generated — edits here are overwritten on the next sync.
+# Add records via the DNS page or /api/v1/dns/local.
+
+address=/app.example.net/192.168.1.160
+host-record=desktop,192.168.1.90
+# the box in the cupboard
+host-record=nas,192.168.1.160
+
+=== iptables ===
+nat|POSTROUTING|-o eth0 -j MASQUERADE
+filter|FORWARD|-i wg0 -j WG-FORWARD
+filter|FORWARD|-o wg0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+filter|INPUT|-i wg0 -j WG-INPUT
+filter|WG-FORWARD|-j DROP
+nat|PREROUTING|-m addrtype --dst-type LOCAL -j HZ-PREROUTING
+nat|POSTROUTING|-j HZ-POSTROUTING
+filter|FORWARD|-j HZ-FORWARD
+nat|HZ-PREROUTING|-p udp --dport 4433 -j DNAT --to-destination 192.168.1.160:4433
+nat|HZ-POSTROUTING|-d 192.168.1.160/32 -o eth0 -p udp --dport 4433 -m conntrack --ctstate DNAT -j MASQUERADE
+filter|HZ-FORWARD|-d 192.168.1.160/32 -i eth0 -p udp --dport 4433 -m conntrack --ctstate DNAT -j ACCEPT
+filter|HZ-FORWARD|-s 192.168.1.160/32 -o eth0 -p udp --sport 4433 -m conntrack --ctstate DNAT -j ACCEPT
+
+=== prometheus targets ===
+app 192.168.1.160:445 /metrics {role=storage,service=files}
+app 192.168.1.160:8080 /metrics {role=storage,service=app,slot=current}
+app 192.168.1.160:8081 /metrics {role=storage,service=app,slot=next}
+node 192.168.1.160:9100 /metrics {role=storage}
+node 192.168.1.60:9100 /metrics {}
+pg 192.168.1.60:9187 /metrics {db=main}
+
+=== host/port map ===
+10.100.0.1
+  tcp/443 haproxy-tls
+  tcp/80 haproxy
+  tcp/8080 homelab-horizon
+  udp/51820 wireguard
+  udp/53 dnsmasq
+192.168.1.1
+  udp/4433 app (forward)
+192.168.1.160
+  tcp/445 files
+  tcp/8080 app
+  tcp/8081 app (deploy-next)
+  udp/4433 app (forward target)
+192.168.1.60
+
+=== known host ips ===
+10.100.0.1
+192.168.1.1
+192.168.1.160
+192.168.1.60

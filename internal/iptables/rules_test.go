@@ -226,15 +226,19 @@ func TestExpectedRulesMFAJailDropsAfterAcceptsInInputChain(t *testing.T) {
 			inputChain = append(inputChain, r)
 		}
 	}
-	if len(inputChain) != 4 {
-		t.Fatalf("want 4 %s rules, got %d: %v", InputChainName, len(inputChain), inputChain)
+	// The gateway-replies ACCEPT, the three portal/DNS ACCEPTs, the DROP.
+	if len(inputChain) != 5 {
+		t.Fatalf("want 5 %s rules, got %d: %v", InputChainName, len(inputChain), inputChain)
 	}
-	for i, r := range inputChain[:3] {
+	if inputChain[0].Canonical() != gatewayRepliesRule.Canonical() {
+		t.Errorf("%s must open with the gateway-replies ACCEPT, got %v", InputChainName, inputChain[0])
+	}
+	for i, r := range inputChain[:4] {
 		if r.Args[len(r.Args)-1] != "ACCEPT" {
 			t.Errorf("%s rule[%d] should be an ACCEPT, got %v", InputChainName, i, r)
 		}
 	}
-	if last := inputChain[3]; last.Args[len(last.Args)-1] != "DROP" {
+	if last := inputChain[4]; last.Args[len(last.Args)-1] != "DROP" {
 		t.Errorf("%s must end in the peer DROP, got %v", InputChainName, last)
 	}
 }
@@ -386,6 +390,45 @@ func TestPeerIPExtraction(t *testing.T) {
 	for _, c := range cases {
 		if got := peerIP(c.in); got != c.want {
 			t.Errorf("peerIP(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// A jailed (or upstream) peer may still be a BACKEND: HAProxy proxies to it and
+// the replies must come back. Live 2026-11-07, the per-peer DROP ate the
+// SYN-ACKs and the service hung. The accept is first, matches only the reply
+// direction (so nothing the peer opened is admitted), and is absent when
+// WG-INPUT has nothing else — empty still means "nobody jailed".
+func TestWGInputAcceptsRepliesToGatewayConnectionsOnly(t *testing.T) {
+	if got := strings.Join(gatewayRepliesRule.Args, " "); got != "-m conntrack --ctstate ESTABLISHED --ctdir REPLY -j ACCEPT" {
+		t.Errorf("rule = %q; it must match only the REPLY direction, and in iptables-save readback form", got)
+	}
+	jailed := Inputs{
+		WGInterface: "wg0", OutIface: "eth0", ServerWGIP: "10.100.0.1", ListenPort: "8080",
+		Peers:       []PeerInput{{Name: "a", IP: "10.100.0.8"}, {Name: "b", IP: "10.100.0.9"}},
+		JailedPeers: map[string]bool{"a": true, "b": true},
+	}
+	var input []Rule
+	for _, r := range ExpectedRules(jailed) {
+		if r.Chain == InputChainName {
+			input = append(input, r)
+		}
+	}
+	n := 0
+	for _, r := range input {
+		if r.Canonical() == gatewayRepliesRule.Canonical() {
+			n++
+		}
+	}
+	if n != 1 || input[0].Canonical() != gatewayRepliesRule.Canonical() {
+		t.Errorf("want the replies ACCEPT exactly once, first in %s; got %d in %v", InputChainName, n, input)
+	}
+
+	free := jailed
+	free.JailedPeers = nil
+	for _, r := range ExpectedRules(free) {
+		if r.Chain == InputChainName {
+			t.Errorf("nobody jailed and no upstream peer, yet %s has %v", InputChainName, r)
 		}
 	}
 }

@@ -40,7 +40,7 @@ OPTIONS
 COMMANDS
   IP banning:
     bans                                        List all active bans
-    ban <ip> [--timeout SEC] [--reason "..."]   Ban an IP address
+    ban <ip> [--timeout SEC] [--reason "..."]   Record a ban (rule lands within a minute)
     unban <ip>                                  Unban an IP address
 
   Rolling deploy:
@@ -51,10 +51,8 @@ COMMANDS
     rolling finalize         Phase 3: up current, verify. Both slots on new code.
 
   Low-level slot control:
-    current up|drain|down    Control the current (active) slot
-    next    up|drain|down    Control the next (standby) slot
-    swap                     Swap slot labels and reload haproxy
-    promote                  Blue-green cutover: up next, drain+down current
+    current up|drain|down    Control the current slot (listed second; hot standby)
+    next    up|drain|down    Control the next slot (listed first; serves when up)
 
   Maintenance page:
     maint-page set <file>    Set a custom 503 page from file ("-" for stdin)
@@ -218,11 +216,11 @@ print(f\"Service:      {d['service']}\")
 print(f\"Domain:       {d['domain']}\")
 print(f\"Balance:      {d.get('balance', 'first')}\")
 print(f\"Health check: {d.get('health_check', '-')}\")
-print(f\"Active slot:  {d.get('active_slot', 'a')}\")
 md5 = d.get('maintenance_page_md5', '')
 print(f\"Maint page:   {md5 if md5 else '(none)'}\")
 print()
-for role in ('current', 'next'):
+# HAProxy's order: next is listed first and serves whenever it is up.
+for role in ('next', 'current'):
     s = d[role]
     print(f\"  {role:8s}  slot={s.get('slot','?')}  backend={s['backend']}  state={s['state']}\")
 "
@@ -341,39 +339,6 @@ case "$CMD" in
     ACTION="${1:?Missing action (up|drain|down)}"
     echo "$CMD -> $ACTION"
     deploy_post "$CMD/$ACTION"
-    ;;
-
-  swap)
-    echo "Swapping active slot..."
-    deploy_post "swap"
-    ;;
-
-  promote)
-    echo "=== Blue-green promote ==="
-    echo ""
-    status
-    echo ""
-
-    echo "Bringing up next slot..."
-    deploy_post "next/up"
-    wait_healthy "next"
-    echo ""
-
-    echo "Draining current slot..."
-    deploy_post "current/drain"
-    wait_drained "current"
-    echo ""
-
-    echo "Taking current slot offline..."
-    deploy_post "current/down"
-    echo ""
-
-    status
-    echo ""
-    echo "=== Promote complete ==="
-    echo ""
-    echo "Traffic is now on the next slot."
-    echo "Run 'swap' when ready to prep for the next deploy cycle."
     ;;
 
   rolling)
@@ -514,13 +479,16 @@ case "$CMD" in
       esac
     done
 
-    echo "Banning $IP..."
+    echo "Recording a ban for $IP..."
     # Build JSON payload safely via python3 (handles quoting)
     PAYLOAD=$(python3 -c "
 import json, sys
 print(json.dumps({'ip': sys.argv[1], 'timeout': int(sys.argv[2]), 'reason': sys.argv[3]}))
 " "$IP" "$BAN_TIMEOUT" "$BAN_REASON")
     ban_post "ban" "$PAYLOAD"
+    echo "Recorded. hz installs the DROP rule on its next reconcile pass -"
+    echo "within a minute - not inside this request. Until then the address"
+    echo "still reaches your service."
     ;;
 
   unban)
@@ -638,7 +606,7 @@ print(f'Maintenance page set. MD5: {md5}')
   *)
     echo "Unknown command: $CMD"
     echo ""
-    echo "Deploy:  status | current|next (up|drain|down) | swap | promote | rolling (...)"
+    echo "Deploy:  status | current|next (up|drain|down) | rolling (...)"
     echo "Bans:    ban <ip> | unban <ip> | bans"
     echo "Maint:   maint-page set <file> | maint-page clear"
     echo "Site:    site push <dir> [--validate] | site rollback | site releases"

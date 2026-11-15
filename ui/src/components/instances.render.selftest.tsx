@@ -1,0 +1,715 @@
+/**
+ * Assertions for `/instances` and `/instances/$instance`, rendered through the
+ * real router — the harness `machines.render.selftest.tsx` and
+ * `projectRoutes.render.selftest.tsx` use: `react-dom/server` to a string,
+ * substring and attribute assertions over it.
+ *
+ * MUI's Dialog renders through a Portal, which `renderToStaticMarkup`
+ * produces nothing for — so this checks the TRIGGER controls (present or
+ * absent), never a dialog's contents.
+ *
+ * Names are placeholders — homelab-horizon is public.
+ */
+import { renderToStaticMarkup } from "react-dom/server";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { RouterProvider, createRootRoute, createRouter, createMemoryHistory, isRedirect } from "@tanstack/react-router";
+import { ThemeProvider } from "@mui/material/styles";
+import baseTheme from "../theme";
+import type { BuildAgentResp, HostsViewResp, InstanceResp, ProjectResp } from "../api/generated-types";
+import { routeTree } from "../routeTree.gen";
+import { Route as HostsRoute } from "../routes/hosts";
+import { AddInstanceKindPanel, NESTED_WAITS_ON } from "../routes/instances.index";
+import { MintTokenPanel } from "../routes/instances.$instance";
+import {
+  BootstrapCommandPanel,
+  NestedInstancesSection,
+  readNestedState,
+} from "./instances/NestedBootstrap";
+import type { EnvironmentResp, NestedBootstrapResp } from "../api/generated-types";
+
+let failures = 0;
+let checks = 0;
+
+function check(ok: boolean, what: string): void {
+  checks += 1;
+  if (!ok) {
+    failures += 1;
+    console.log(`  FAIL  ${what}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
+
+const PROJECTS: ProjectResp[] = [{ name: "storefront" }];
+
+/** A build agent is NOT an hz instance: seeded so its absence is a claim about the screen, not the fixture. */
+const BUILD_AGENTS: BuildAgentResp[] = [{ name: "agent-only-xyz", project: "storefront", host: "agent-host-xyz", has_token: true }];
+
+function inst(over: Partial<InstanceResp>): InstanceResp {
+  return {
+    name: "gw-host",
+    self: true,
+    address: "192.168.1.1",
+    role: "standalone",
+    peerId: "",
+    primaryId: "",
+    project: "",
+    declared: false,
+    version: "v1.2.3",
+    ...over,
+  };
+}
+
+const STANDALONE: InstanceResp[] = [inst({})];
+
+const FLEET: InstanceResp[] = [
+  inst({ role: "primary", peerId: "gw-a", primaryId: "gw-a", declared: true, project: "storefront" }),
+  inst({ name: "gw-b", self: false, address: "10.100.0.2:8080", role: "replica", peerId: "gw-b", primaryId: "gw-a", version: undefined }),
+  inst({
+    name: "gw-c",
+    self: false,
+    address: "10.100.0.3:8080",
+    role: "replica",
+    peerId: "gw-c",
+    primaryId: "gw-a",
+    declared: true,
+    project: "storefront",
+    version: undefined,
+  }),
+];
+
+/** A standalone gateway plus one declared nested hz (an Hz Instance record). */
+const WITH_NESTED: InstanceResp[] = [
+  inst({ declared: true, project: "storefront" }),
+  inst({
+    name: "prod-hz",
+    self: false,
+    address: "https://hz.prod.example.invalid",
+    role: "nested",
+    declared: true,
+    project: "storefront",
+    version: undefined,
+  }),
+];
+
+/** A primary with one peer, plus a nested hz — which must not count as a peer. */
+const FLEET_WITH_NESTED: InstanceResp[] = [
+  inst({ role: "primary", peerId: "gw-a", primaryId: "gw-a" }),
+  inst({ name: "gw-b", self: false, address: "10.100.0.2:8080", role: "replica", peerId: "gw-b", primaryId: "gw-a", version: undefined }),
+  inst({ name: "prod-hz", self: false, address: "https://hz.prod.example.invalid", role: "nested", declared: true, version: undefined }),
+];
+
+const REPLICA_SELF: InstanceResp[] = [
+  inst({
+    role: "replica",
+    peerId: "gw-b",
+    primaryId: "gw-a",
+    declared: true,
+    sync: { pullCount: 3, lastSuccessAt: 0, lastError: "dial tcp 10.100.0.1:8080: i/o timeout" },
+  }),
+  inst({ name: "gw-a", self: false, address: "10.100.0.1:8080", role: "primary", peerId: "gw-a", primaryId: "gw-a", version: undefined }),
+];
+
+const HOSTS_VIEW: HostsViewResp = {
+  hosts: [
+    {
+      name: "self",
+      ip: "192.168.1.1",
+      self: true,
+      ref: "@self",
+      editable: false,
+      notEditableWhy: "@self moves by setting local_interface on the Settings page.",
+      addressable: true,
+      references: [
+        { kind: "service internal DNS", owner: "grafana", field: "internal_dns.ip", value: "@self", resolved: "192.168.1.1" },
+      ],
+      occurrences: [],
+      occurrencesKnown: true,
+    },
+  ],
+};
+
+type Seed = InstanceResp[] | "pending" | "failed";
+
+function seeded(instances: Seed): QueryClient {
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false, retryOnMount: false, refetchOnMount: false, staleTime: Infinity } },
+  });
+  qc.setQueryData(["auth", "status"], { authenticated: true, username: "ops", role: "admin", configPrimary: true });
+  qc.setQueryData(["projects"], PROJECTS);
+  qc.setQueryData(["topology", "hosts-view"], HOSTS_VIEW);
+  qc.setQueryData(["build-agents"], BUILD_AGENTS);
+  if (instances === "failed") {
+    const q = qc.getQueryCache().build(qc, { queryKey: ["instances"] });
+    q.setState({ status: "error", error: new Error("503 Service Unavailable"), fetchStatus: "idle" });
+  } else if (instances !== "pending") {
+    qc.setQueryData(["instances"], instances);
+  }
+  return qc;
+}
+
+interface Rendered {
+  html: string;
+  text: string;
+
+}
+
+async function at(path: string, instances: Seed): Promise<Rendered> {
+  const router = createRouter({ routeTree, history: createMemoryHistory({ initialEntries: [path] }) });
+  await router.load();
+  const html = renderToStaticMarkup(
+    <QueryClientProvider client={seeded(instances)}>
+      <ThemeProvider theme={baseTheme}>
+        <RouterProvider router={router as never} />
+      </ThemeProvider>
+    </QueryClientProvider>,
+  );
+  const text = html
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/g, " ")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&#x27;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ");
+  return { html, text };
+}
+
+/** The `<tr>` carrying `data-instance-row="name"`. */
+function rowHtml(html: string, name: string): string {
+  const marker = `data-instance-row="${name}"`;
+  const i = html.indexOf(marker);
+  if (i < 0) return "";
+  const start = html.lastIndexOf("<tr", i);
+  const end = html.indexOf("</tr>", i);
+  return start < 0 || end < 0 ? "" : html.slice(start, end);
+}
+
+function rowText(html: string, name: string): string {
+  return rowHtml(html, name).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
+}
+
+function rowCount(html: string): number {
+  return (html.match(/data-instance-row="/g) ?? []).length;
+}
+
+console.log("instances — rendered through the real router");
+
+// ---------------------------------------------------------------------------
+console.log("· standalone: one self row, global, standalone, no peers");
+// ---------------------------------------------------------------------------
+{
+  const r = await at("/instances", STANDALONE);
+  check(r.text.includes("Instances"), "the screen is titled Instances");
+  check(/>Add instance</.test(r.html), "with [Add instance] as its action");
+  check(rowCount(r.html) === 1, `exactly one row — got ${rowCount(r.html)}`);
+  const row = rowText(r.html, "gw-host");
+  check(/\bthis\b/.test(row), "the self row carries the 'this' chip");
+  check(row.includes("192.168.1.1"), "and its address");
+  check(row.includes("global"), "an undeclared instance reads 'global', never blank");
+  check(row.includes("standalone"), "and its cluster cell says standalone");
+  check(row.includes("—"), "with no peer count");
+  check(!/with \d+ peer/.test(row), "and no 'with N peers'");
+}
+
+// ---------------------------------------------------------------------------
+console.log("· a primary with two peers: three rows");
+// ---------------------------------------------------------------------------
+{
+  const r = await at("/instances", FLEET);
+  check(rowCount(r.html) === 3, `self + 2 peers is 3 rows — got ${rowCount(r.html)}`);
+  const self = rowText(r.html, "gw-host");
+  check(self.includes("primary") && self.includes("with 2 peers"), `self is 'primary with 2 peers' — got: ${self}`);
+  check(self.includes("storefront"), "self's project is its machine record's owner");
+  const b = rowText(r.html, "gw-b");
+  check(b.includes("replica") && b.includes("with 2 peers"), "a peer is a replica with 2 peers");
+  check(!/\bthis\b/.test(b), "and carries no 'this' chip");
+  check(b.includes("global"), "an undeclared peer reads global");
+  check(rowText(r.html, "gw-c").includes("storefront"), "a declared peer shows its owner");
+  check(/href="\/instances\/gw-b"/.test(rowHtml(r.html, "gw-b")), "a row links to its detail");
+}
+
+// ---------------------------------------------------------------------------
+console.log("· loading, failed and answered are three different pages");
+// ---------------------------------------------------------------------------
+{
+  const pending = await at("/instances", "pending");
+  const failed = await at("/instances", "failed");
+  const answered = await at("/instances", STANDALONE);
+  check(pending.text.includes("Asking hz which instances it knows"), "pending says the question is in flight");
+  check(rowCount(pending.html) === 0, "and draws no rows");
+  check(failed.text.includes("503 Service Unavailable"), "failed carries the failure");
+  check(failed.text.includes("because the read failed"), "and says the list is empty because the read failed");
+  check(!failed.text.includes("Asking hz"), "and is not drawn as still loading");
+  check(new Set([pending.text, failed.text, answered.text]).size === 3, "three states, three pages");
+}
+
+// ---------------------------------------------------------------------------
+console.log("· self detail: the project control and the address audit");
+// ---------------------------------------------------------------------------
+{
+  const r = await at("/instances/gw-host", STANDALONE);
+  check(/aria-label="Put in a project"/.test(r.html), "undeclared self offers 'Put in a project'");
+  check(!/aria-label="Change project"/.test(r.html), "and not 'Change project'");
+  check(r.text.includes("no machine record"), "and says there is no machine record");
+  check(r.text.includes("standalone") && r.text.includes("v1.2.3"), "header facts: role and version");
+  check(r.text.includes("Addresses"), "the audit section is on the page");
+  check(r.text.includes("What points at it") && r.text.includes("What carries its address"), "with both of its lists");
+  check(r.text.includes("@self") && r.text.includes("grafana"), "and its rows");
+  check(!r.text.includes("How to read this screen"), "the old legend prose is gone");
+
+  const declared = await at("/instances/gw-host", FLEET);
+  check(/aria-label="Change project"/.test(declared.html), "declared self offers 'Change project'");
+  check(!/aria-label="Put in a project"/.test(declared.html), "and not 'Put in a project'");
+}
+
+// ---------------------------------------------------------------------------
+console.log("· peer detail: no declare control, no audit");
+// ---------------------------------------------------------------------------
+{
+  const r = await at("/instances/gw-b", FLEET);
+  check(r.text.includes("gw-b") && r.text.includes("replica"), "the peer's page names it and its role");
+  check(!/aria-label="Put in a project"/.test(r.html), "no 'Put in a project' on a peer");
+  check(!/aria-label="Change project"/.test(r.html), "no 'Change project' on a peer");
+  check(r.text.includes("may differ from its peer ID"), "the one line saying why");
+  check(r.text.includes("global"), "an undeclared peer's project reads global");
+  check(!r.text.includes("What points at it"), "the address audit is self-only");
+
+  // A PRIMARY peer (self is a replica) is the case the replica branch does not
+  // also cover: only the self check keeps a control off it.
+  const a = await at("/instances/gw-a", REPLICA_SELF);
+  check(a.text.includes("primary"), "a primary peer's page names its role");
+  check(!/aria-label="(Change project|Put in a project)"/.test(a.html), "and offers no declare control either");
+
+  const c = await at("/instances/gw-c", FLEET);
+  check(c.text.includes("storefront"), "a declared peer shows its project read-only");
+}
+
+// ---------------------------------------------------------------------------
+console.log("· replica self: sync status shown, edit refused with the reason");
+// ---------------------------------------------------------------------------
+{
+  const r = await at("/instances/gw-host", REPLICA_SELF);
+  check(r.text.includes("Last pull") && r.text.includes("never"), "a replica that never pulled says never");
+  check(r.text.includes("i/o timeout"), "and carries the last error");
+  check(!/aria-label="(Change project|Put in a project)"/.test(r.html), "no control: a replica is read-only");
+  check(r.text.includes("config primary (gw-a)"), "the sentence names where it IS changed");
+}
+
+// ---------------------------------------------------------------------------
+console.log("· /hosts redirects, and the gateway group links Instances");
+// ---------------------------------------------------------------------------
+{
+  // Asserted at the ROUTE, as projectRoutes.render.selftest.tsx does for
+  // /dashboard: `router.load()` off a browser does not follow a redirect, so
+  // a rendered check would pass on a blank page.
+  let to = "(no redirect)";
+  try {
+    await (HostsRoute.options.beforeLoad as (ctx: never) => unknown)?.({} as never);
+  } catch (e) {
+    to = isRedirect(e) ? ((e as { options?: { to?: string } }).options?.to ?? "(no to)") : "(error)";
+  }
+  check(to === "/instances", `/hosts → /instances — got ${to}`);
+
+  const r = await at("/instances", STANDALONE);
+  const zone = /data-gateway-zone[^>]*>([\s\S]*?)<\/ul>/.exec(r.html)?.[1] ?? "";
+  check(zone !== "", "the gateway group is on the page");
+  check(/href="\/instances"/.test(zone) && zone.includes("Instances"), "and has an Instances entry");
+  check(!/href="\/hosts"/.test(zone) && !/>Hosts</.test(zone), "and no Hosts entry");
+}
+
+// ---------------------------------------------------------------------------
+console.log("· a build agent is not an hz instance");
+// ---------------------------------------------------------------------------
+{
+  for (const [path, seed] of [["/instances", FLEET], ["/instances/gw-b", FLEET]] as const) {
+    const r = await at(path, seed);
+    check(r.text.includes("gw-b"), `${path} renders its instances (the absence below is not a blank page)`);
+    check(!r.text.includes("agent-only-xyz") && !r.text.includes("agent-host-xyz"), `${path} lists no build agent and no agent host`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// POSITIVE CONTROL — run by hand, then restored, 2026-09-29:
+//   1. `instances.index.tsx` Project cell rendering `{row.project}` instead of
+//      `LocationCell` → "reads 'global', never blank" and "an undeclared peer
+//      reads global" FAILED (46/48).
+//   2. `ProjectControl`'s `!row.self` branch forced false → "the one line
+//      saying why" and the primary-peer "no declare control" check FAILED
+//      (48/50). Before the primary-peer check existed, only the first failed:
+//      a replica peer is covered by the replica branch too, so the check was
+//      added to make the self guard observable on its own.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+console.log("· a nested hz is its own row: its URL, its owner, 'nested', never a peer");
+// ---------------------------------------------------------------------------
+{
+  const r = await at("/instances", WITH_NESTED);
+  check(rowCount(r.html) === 2, `self + one nested is 2 rows — got ${rowCount(r.html)}`);
+  const n = rowText(r.html, "prod-hz");
+  check(n.includes("https://hz.prod.example.invalid"), "the nested row's address is its hz URL");
+  check(n.includes("storefront"), "and its project is its machine record's owner");
+  check(n.includes("nested") && n.includes("separate config layer"), `its Cluster cell says nested, a separate layer — got: ${n}`);
+  check(!/\bthis\b/.test(n), "and it carries no 'this' chip");
+  check(rowText(r.html, "gw-host").includes("standalone"), "self stays standalone — a nested hz is no cluster");
+
+  const f = await at("/instances", FLEET_WITH_NESTED);
+  check(rowText(f.html, "gw-host").includes("with 1 peer"), "a nested row is not counted as a peer");
+  check(!rowText(f.html, "prod-hz").includes("peer"), "and says nothing about peers itself");
+
+  const d = await at("/instances/prod-hz", WITH_NESTED);
+  check(d.text.includes("A separate hz") && d.text.includes("not a member of this cluster"), "its detail says what it is");
+  check(!d.text.includes("Config primary"), "and names no config primary");
+  check(!d.text.includes("Settings → HA Fleet"), "and does not send you to HA Fleet for it");
+  check(!/href="\/machines\/prod-hz"/.test(d.html), "it links to no machine page — an hz instance is not a machine");
+  check(d.html.includes("data-nested-controls") && d.text.includes("Edit") && d.text.includes("Remove"), "its record is edited and removed here");
+  check(!/aria-label="(Change project|Put in a project)"/.test(d.html), "with no self control here");
+}
+
+// ---------------------------------------------------------------------------
+console.log("· [Add instance] asks for the kind: cluster node, or declare a nested instance");
+// ---------------------------------------------------------------------------
+{
+  // Operator, 2026-09-29 (relayed from the redline session): "an instance
+  // comes in two flavors, and the add flow has no way to say which."
+  const html = renderToStaticMarkup(
+    <ThemeProvider theme={baseTheme}>
+      <AddInstanceKindPanel onCluster={() => {}} onNested={() => {}} />
+    </ThemeProvider>,
+  ).replace(/<style[^>]*>[\s\S]*?<\/style>/g, " ");
+  const text = html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ");
+  check(text.includes("Cluster node"), "the cluster-node kind is offered");
+  check(/aria-label="Cluster node"(?:(?!aria-label)[\s\S])*?HA Fleet/.test(html), "and says it joins from Settings → HA Fleet");
+  const nested = /<[^>]*data-nested-kind[^>]*>/.exec(html)?.[0] ?? "";
+  check(nested !== "", "the nested kind is offered");
+  check(!/Mui-disabled|aria-disabled="true"|disabled=""/.test(nested), "and ENABLED: declaring one is built (N3)");
+  check(text.includes("Declare a nested instance"), "as a declaration");
+  check(/data-nested-kind[\s\S]*?creates the VPN client it reaches this hz through/.test(html), "that also creates the child's VPN client (N1b)");
+  check(!/data-nested-disabled/.test(html), "the old greyed option is gone");
+  const cannot = /data-nested-cannot[^>]*>([\s\S]*?)<\/span>/.exec(html)?.[1] ?? "";
+  check(cannot.includes("mirror packages") && cannot.includes("proxy config"), "it says what it cannot do yet");
+  check(
+    NESTED_WAITS_ON.every((w) => cannot.includes(w)),
+    "and names every thing that still waits (plan.md Tier 1b)",
+  );
+  check(!NESTED_WAITS_ON.some((w) => w.includes("Upstream")), "Upstream is built, so it is not listed as waited on");
+  check(NESTED_WAITS_ON.some((w) => w.includes("armed agent")), "an armed agent still is");
+  check(NESTED_WAITS_ON.some((w) => w.includes("registry crossing")), "and so is the registry crossing");
+  check(!NESTED_WAITS_ON.some((w) => w.includes("credential")), "the child's credential is built (N4a's instance token), so it is not listed");
+}
+
+console.log("· N4a — a nested instance's token and last pull");
+{
+  const nested = (n: InstanceResp["nested"]): InstanceResp[] => [
+    inst({}),
+    inst({ name: "prod-hz", self: false, address: "http://10.100.0.9:8080", role: "nested", declared: true, version: undefined, nested: n }),
+  ];
+  const never = await at("/instances/prod-hz", nested({ hasToken: false, lastPullAt: 0, lastPullRung: "", state: "declared" }));
+  check(never.html.includes('data-instance-token-state="none"') && never.text.includes("Mint instance token"), "no token: offers Mint instance token");
+  check(never.html.includes('data-last-pull="never"') && never.text.includes("never pulled"), "never pulled says so — not a blank, not 'long ago'");
+  const pulled = await at("/instances/prod-hz", nested({ hasToken: true, lastPullAt: 1790000000, lastPullRung: "storefront/prod", state: "connected" }));
+  check(pulled.html.includes('data-instance-token-state="minted"') && pulled.text.includes("Mint a new instance token"), "a minted token offers a re-mint");
+  check(pulled.html.includes('data-last-pull="pulled"') && pulled.text.includes("storefront/prod"), "the last pull names its time and rung");
+  const unknown = await at("/instances/prod-hz", nested({ hasToken: true, lastPullAt: 0, lastPullRung: "", pullsUnknown: "identity store unavailable", state: "never-connected" }));
+  check(unknown.html.includes('data-last-pull="unknown"') && !unknown.text.includes("never pulled"), "an unreadable pull record is not 'never pulled'");
+  const self = await at("/instances/gw-host", nested({ hasToken: false, lastPullAt: 0, lastPullRung: "", state: "declared" }));
+  check(!self.html.includes("data-instance-token-state"), "this instance's own page offers no instance token");
+
+  const panel = (token: string | null) =>
+    renderToStaticMarkup(
+      <ThemeProvider theme={baseTheme}>
+        <MintTokenPanel machine="prod-hz" token={token} error={null} pending={false} onMint={() => {}} onClose={() => {}} />
+      </ThemeProvider>,
+    );
+  const offer = panel(null);
+  check(offer.includes("data-token-offer") && !offer.includes("data-instance-token"), "before minting: the offer, no token");
+  const shown = panel("hzi_abc123");
+  check(shown.includes("data-token-shown-once") && shown.includes('value="hzi_abc123"'), "after minting: the token, marked shown once");
+}
+
+
+console.log("· the nested bootstrap — states, the command panel, the project section");
+{
+  const T = 1790000000;
+  const row = (n: InstanceResp["nested"]): InstanceResp[] => [
+    inst({}),
+    inst({ name: "loadtest-hz", self: false, address: "http://10.100.0.3:8080", role: "nested", declared: true, project: "storefront", version: undefined, nested: n }),
+  ];
+  const states: [InstanceResp["nested"], string, string][] = [
+    [{ hasToken: false, lastPullAt: 0, lastPullRung: "", state: "declared" }, "declared", "declared"],
+    [{ hasToken: false, lastPullAt: 0, lastPullRung: "", state: "command-generated", grantExpiresAt: T }, "command-generated", "command generated (expires 2026-09-21 14:13:20Z)"],
+    [{ hasToken: true, lastPullAt: 0, lastPullRung: "", state: "enrolled", enrolledAt: T }, "enrolled", "enrolled — waiting for its first pull"],
+    [{ hasToken: true, lastPullAt: T, lastPullRung: "storefront/loadtest", state: "connected" }, "connected", "connected (last pull 2026-09-21 14:13:20Z · storefront/loadtest)"],
+    [{ hasToken: true, lastPullAt: 0, lastPullRung: "", state: "never-connected" }, "never-connected", "never connected"],
+  ];
+  for (const [n, state, label] of states) {
+    check(readNestedState(n).label === label, `${state} reads "${label}" — got "${readNestedState(n).label}"`);
+    const list = await at("/instances", row(n));
+    const r = rowText(list.html, "loadtest-hz");
+    check(list.html.includes(`data-nested-state="${state}"`) && r.includes(label), `the Instances row shows ${state}`);
+    const d = await at("/instances/loadtest-hz", row(n));
+    check(d.html.includes(`data-nested-state="${state}"`), `the instance page shows ${state}`);
+  }
+  check(readNestedState(undefined).state === "declared", "a row with no nested facts reads as declared");
+
+  const draw = (node: React.ReactNode) => {
+    const html = renderToStaticMarkup(<ThemeProvider theme={baseTheme}>{node}</ThemeProvider>).replace(/<style[^>]*>[\s\S]*?<\/style>/g, " ");
+    return { html, text: html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ") };
+  };
+  const resp: NestedBootstrapResp = {
+    command: "curl -fsSL https://portal.example.com/admin/hz-child/install/hzc_abc | sudo bash",
+    expiresAt: T,
+    instance: "loadtest-hz",
+    machine: "loadtest-hz",
+    project: "storefront",
+    rung: "storefront/loadtest",
+    platforms: ["linux-arm64"],
+    missing: ["linux-amd64"],
+    warning: "This command works only on linux-arm64 boxes",
+    reused: [],
+    revoked: true,
+  };
+  const p = draw(<BootstrapCommandPanel resp={resp} />);
+  check(p.html.includes('value="curl -fsSL https://portal.example.com/admin/hz-child/install/hzc_abc | sudo bash"'), "the panel shows the command");
+  check(p.html.includes('aria-label="Copy the command"'), "with a copy button");
+  check(p.text.includes("2026-09-21 14:13:20Z") && p.html.includes("data-bootstrap-expires"), "and its expiry");
+  check(p.html.includes("data-bootstrap-warning") && p.text.includes("works only on linux-arm64"), "a missing platform is said before the command");
+  check(p.html.indexOf("data-bootstrap-warning") < p.html.indexOf("data-bootstrap-command"), "above it, not below");
+  check(p.text.includes("Shown once") && p.text.includes("no longer works"), "shown once, and a revoked earlier command is said");
+  check(p.text.includes("nothing inbound"), "and the network requirement in one line");
+  const plain = draw(<BootstrapCommandPanel resp={{ ...resp, warning: undefined, missing: [], revoked: false }} />);
+  check(!plain.html.includes("data-bootstrap-warning"), "no warning when every platform is there");
+  check(p.html.includes('data-bootstrap-human-vpn="none"') && p.text.includes("ssh tunnel only"), "no human VPN is said, not left blank");
+  const human = draw(
+    <BootstrapCommandPanel
+      resp={{
+        ...resp,
+        humanVpn: {
+          range: "10.101.0.0/24",
+          proposed: true,
+          serverAddress: "10.101.0.1",
+          kiosk: "kiosk.hz.loadtest.example.com",
+          kioskUrl: "https://kiosk.hz.loadtest.example.com",
+          endpoint: "kiosk.hz.loadtest.example.com:51820",
+          domainsChanged: true,
+        },
+      }}
+    />,
+  );
+  check(
+    human.text.includes("10.101.0.0/24") && human.text.includes("proposed by this hz") && human.text.includes("kiosk.hz.loadtest.example.com:51820"),
+    "the human VPN's range, its proposer and the endpoint are shown",
+  );
+  check(human.text.includes("inbound only its human VPN") && !human.text.includes("nothing inbound"), "with a human VPN the box needs one inbound port, and says so");
+  check(!human.html.includes("data-bootstrap-ui-url"), "a kiosk-only command shows no VPN-only UI name");
+  const withDomain = draw(
+    <BootstrapCommandPanel
+      resp={{
+        ...resp,
+        humanVpn: {
+          range: "10.101.0.0/24",
+          proposed: true,
+          serverAddress: "10.101.0.1",
+          domain: "loadtest.redline.example.com",
+          kiosk: "kiosk.hz.loadtest.redline.example.com",
+          kioskUrl: "https://kiosk.hz.loadtest.redline.example.com",
+          uiUrl: "https://hz.loadtest.redline.example.com/app/",
+          endpoint: "kiosk.hz.loadtest.redline.example.com:51820",
+          domainsChanged: true,
+        },
+      }}
+    />,
+  );
+  check(
+    withDomain.html.includes("data-bootstrap-ui-url") && withDomain.text.includes("https://hz.loadtest.redline.example.com/app/") && withDomain.text.includes("VPN-only"),
+    "with a domain the command names the VPN-only UI",
+  );
+  check(withDomain.text.includes("loadtest.redline.example.com is now this instance") && withDomain.text.includes("derive from it"), "and says the names derive from the domain");
+
+  const envs: EnvironmentResp[] = [
+    { project: "storefront", name: "staging", posture: "staging", placement: { state: "here", statement: "" } } as EnvironmentResp,
+    { project: "storefront", name: "loadtest", posture: "prod", from: "staging", upstream: "loadtest-hz", placement: { state: "remote", statement: "" } } as EnvironmentResp,
+  ];
+  // The section links each row to its instance page, so it is drawn inside a
+  // router whose root renders it.
+  const section = async (instances: { rows?: InstanceResp[]; error?: string; loading: boolean }) => {
+    const root = createRootRoute({
+      component: () => <NestedInstancesSection project="storefront" instances={instances} environments={envs} onAdd={() => {}} />,
+    });
+    const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: ["/"] }) });
+    await router.load();
+    return draw(<RouterProvider router={router as never} />);
+  };
+  const empty = await section({ rows: [inst({})], loading: false });
+  check(empty.text.includes("No nested instances in storefront.") && empty.html.includes("data-empty-row"), "none: one line");
+  check(empty.html.includes('aria-label="Add a nested instance to storefront"'), "with [Add nested instance] beside it");
+  const full = await section({ rows: row(states[3]![0]), loading: false });
+  check(full.html.includes('data-nested-row="loadtest-hz"') && full.text.includes("storefront/loadtest"), "a row names its rung");
+  check(full.html.includes('data-nested-state="connected"'), "and its state");
+  const other = await section({ rows: row(states[3]![0]).map((r) => ({ ...r, project: "elsewhere" })), loading: false });
+  check(!other.html.includes("data-nested-row"), "another project's nested instance is not listed");
+  check((await section({ loading: true })).text.includes("Asking hz"), "loading is not empty");
+  const failed = await section({ error: "503", loading: false });
+  check(failed.text.includes("could not be asked") && !failed.text.includes("No nested instances"), "a failed read is not empty");
+}
+
+console.log("· TLS for a nested hz — the parent's domains and certificate, the child's pulled certificate");
+{
+  const nestedRow = (n: InstanceResp["nested"]): InstanceResp[] => [
+    inst({}),
+    inst({ name: "prod-hz", self: false, address: "http://10.100.0.9:8080", role: "nested", declared: true, version: undefined, nested: n }),
+  ];
+  const base = { hasToken: true, lastPullAt: 1790000000, lastPullRung: "storefront/prod", state: "connected" };
+  const none = await at("/instances/prod-hz", nestedRow({ ...base }));
+  check(none.html.includes('data-tls-domains="none"') && none.text.includes("No TLS domains for prod-hz."), "no domains: one line");
+  check(none.html.includes('aria-label="Set TLS domains"'), "with [Set domains] beside it");
+  check(!none.html.includes("data-cert-state"), "and no certificate row for names nobody declared");
+
+  const issued = await at(
+    "/instances/prod-hz",
+    nestedRow({
+      ...base,
+      domains: ["app.example.com"],
+      cert: { issued: true, notAfter: 1800000000, sans: ["app.example.com"], sha256: "a".repeat(64), lastPulledAt: 1790000100, lastPulledSha256: "a".repeat(64) },
+    }),
+  );
+  check(issued.html.includes('data-tls-domains="app.example.com"') && issued.html.includes('aria-label="Edit TLS domains"'), "the domains, with an editor");
+  check(issued.html.includes('data-cert-state="issued"') && issued.text.includes("not after 2027-01-15"), "issued, with its not-after");
+  check(issued.html.includes('data-cert-pulled="pulled"'), "and when the child last pulled it");
+  check(!/BEGIN|PRIVATE KEY/.test(issued.html), "no key material on the screen");
+
+  const failed = await at(
+    "/instances/prod-hz",
+    nestedRow({ ...base, domains: ["app.example.com"], cert: { issued: false, lastAttemptAt: 1790000000, lastError: "rateLimited" } }),
+  );
+  check(failed.html.includes('data-cert-state="failed"') && failed.text.includes("rateLimited"), "a failed issuance says why");
+  check(failed.html.includes('data-cert-pulled="not-since"') && failed.text.includes("not since this hz started"), "an unrecorded pull is 'not since', not 'never'");
+
+  const child = await at("/instances/gw-host", [
+    inst({ parentCert: { parent: "http://10.100.0.1:8080", instance: "prod-hz", installed: true, notAfter: 1800000000, sans: ["app.example.com"] } }),
+  ]);
+  check(child.html.includes('data-parent-cert="installed"') && child.text.includes("certificate from parent http://10.100.0.1:8080, not after 2027-01-15"), "the child names its parent and the not-after");
+  const expired = await at("/instances/gw-host", [
+    inst({ parentCert: { parent: "http://10.100.0.1:8080", instance: "prod-hz", installed: true, notAfter: 1000000000 } }),
+  ]);
+  check(expired.html.includes('data-parent-cert="expired"') && expired.text.includes("EXPIRED, still served"), "an expired one is kept and says so");
+  const plain = await at("/instances/gw-host", [inst({})]);
+  check(!plain.html.includes("data-parent-cert"), "an hz with no upstream shows no parent certificate");
+}
+
+console.log("· an hz instance's ONE domain (N4j) — the derived names, public or VPN-only");
+{
+  const nestedRow = (n: InstanceResp["nested"]): InstanceResp[] => [
+    inst({}),
+    inst({ name: "prod-hz", self: false, address: "http://10.100.0.9:8080", role: "nested", declared: true, version: undefined, nested: n }),
+  ];
+  const base = { hasToken: true, lastPullAt: 1790000000, lastPullRung: "storefront/prod", state: "connected" };
+
+  const legacy = await at("/instances/prod-hz", nestedRow({ ...base, domains: ["app.example.com"], dns: { grant: ["app.example.com"], records: [] } }));
+  check(legacy.html.includes('data-instance-domain="none"') && legacy.text.includes("No domain for prod-hz"), "no domain: one-line nudge");
+  check(legacy.html.includes('aria-label="Set a domain"'), "with [Set a domain] beside it");
+  check(!legacy.html.includes("data-instance-names"), "and no derived names table");
+  check(legacy.html.includes('aria-label="Edit TLS domains"') && legacy.html.includes('aria-label="Edit DNS grant"'), "its explicit names and grant keep their editors");
+
+  const d = "loadtest.redline.example.com";
+  const derived = await at(
+    "/instances/prod-hz",
+    nestedRow({
+      ...base,
+      domain: d,
+      domains: [d, `kiosk.hz.${d}`, `hz.${d}`],
+      names: [
+        { name: d, scope: "public", record: "published", inCert: true },
+        { name: `kiosk.hz.${d}`, scope: "public", record: "pending", inCert: true },
+        { name: `hz.${d}`, scope: "vpn-only", record: "never", inCert: false },
+      ],
+      cert: { issued: true, notAfter: 1800000000, sans: [d, `kiosk.hz.${d}`], sha256: "" },
+      dns: { grant: [d, `*.${d}`], records: [] },
+    }),
+  );
+  check(derived.html.includes(`data-instance-domain="${d}"`) && derived.html.includes('aria-label="Edit domain"'), "the domain, with an editor");
+  check(derived.html.includes("data-instance-names"), "the derived names table");
+  check(
+    derived.html.includes(`data-instance-name="hz.${d}" data-name-scope="vpn-only"`) && derived.text.includes("VPN-only") && derived.text.includes("never published"),
+    "hz.<domain> reads VPN-only, never published",
+  );
+  check(derived.html.includes(`data-instance-name="kiosk.hz.${d}" data-name-scope="public"`) && derived.html.includes('data-name-record="pending"'), "the kiosk is public, its record pending");
+  check(derived.html.includes('data-name-record="published"') && derived.html.includes('data-name-in-cert="yes"') && derived.html.includes('data-name-in-cert="no"'), "record and certificate state per name");
+  check(derived.html.includes("data-tls-derived") && !derived.html.includes('aria-label="Edit TLS domains"'), "the TLS names are derived: no editor");
+  check(derived.html.includes("data-dns-grant-derived") && !derived.html.includes('aria-label="Edit DNS grant"'), "the grant is derived: no editor");
+}
+
+console.log("· DNS for a nested hz — the parent's grant and records, the child's parent answer");
+{
+  const nestedRow = (n: InstanceResp["nested"]): InstanceResp[] => [
+    inst({}),
+    inst({ name: "prod-hz", self: false, address: "http://10.100.0.9:8080", role: "nested", declared: true, version: undefined, nested: n }),
+  ];
+  const base = { hasToken: true, lastPullAt: 1790000000, lastPullRung: "storefront/prod", state: "connected" };
+
+  const none = await at("/instances/prod-hz", nestedRow({ ...base, dns: { grant: [], records: [] } }));
+  check(none.html.includes('data-dns-grant="none"') && none.text.includes("No DNS grant for prod-hz"), "no grant: one line");
+  check(none.html.includes('aria-label="Set DNS grant"'), "with [Set grant] beside it");
+  check(none.html.includes('data-instance-dns-records="none"') && none.text.includes("No DNS published for prod-hz."), "no records: one line");
+  check(none.html.includes('data-dns-last-request="not-since"'), "an unrecorded request is 'not since', not 'never'");
+
+  const full = await at(
+    "/instances/prod-hz",
+    nestedRow({
+      ...base,
+      dns: {
+        grant: ["app.example.com", "*.hz.example.com"],
+        records: [
+          { zone: "example.com", name: "app.example.com", type: "A", values: ["203.0.113.20"], ttl: 300, status: "published" },
+          { zone: "example.com", name: "x.hz.example.com", type: "A", values: ["203.0.113.20"], ttl: 300, status: "pending", reason: "stored on the parent; its DNS sync has not written it yet" },
+        ],
+        lastRequestAt: 1790000200,
+        lastPublicIp: "203.0.113.20",
+        lastRefused: [{ name: "evil.example.com", type: "A", values: ["203.0.113.66"], status: "refused", reason: "evil.example.com is outside hz instance prod-hz's DNS grant" }],
+      },
+    }),
+  );
+  check(full.html.includes('data-dns-grant="app.example.com,*.hz.example.com"') && full.html.includes('aria-label="Edit DNS grant"'), "the grant, with an editor");
+  check(full.html.includes('data-instance-dns-record="app.example.com"') && full.html.includes('data-dns-status="published"'), "a published record");
+  check(full.html.includes('data-dns-status="pending"') && full.text.includes("has not written it yet"), "a pending record says why");
+  check(full.html.includes('data-dns-refused="evil.example.com"') && full.text.includes("outside hz instance prod-hz's DNS grant"), "a refusal names the reason");
+  check(full.html.includes('data-dns-last-request="asked"') && full.text.includes("its public IP 203.0.113.20"), "the last request, with its address");
+
+  const pd = (over: Partial<NonNullable<InstanceResp["parentDns"]>>): InstanceResp[] => [
+    inst({ parentDns: { parent: "http://10.100.0.1:8080", instance: "prod-hz", enabled: true, records: [], ...over } }),
+  ];
+  const answered = await at(
+    "/instances/gw-host",
+    pd({
+      lastAnswerAt: 1790000300,
+      records: [
+        { name: "app.example.com", type: "A", values: ["203.0.113.20"], status: "published" },
+        { name: "evil.example.com", type: "A", values: ["203.0.113.20"], status: "refused", reason: "outside the grant" },
+        { name: "x.hz.example.com", type: "A", values: ["203.0.113.20"], status: "pending" },
+      ],
+    }),
+  );
+  check(answered.html.includes('data-parent-dns="answered"') && answered.text.includes("DNS published by parent http://10.100.0.1:8080"), "the child names its parent");
+  check(answered.text.replace(/&gt;/g, ">").includes("A app.example.com -> 203.0.113.20: published by parent"), "a published record");
+  check(answered.text.replace(/&gt;/g, ">").includes("A evil.example.com -> 203.0.113.20: refused: outside the grant"), "a refused record, with the reason");
+  check(answered.text.replace(/&gt;/g, ">").includes("A x.hz.example.com -> 203.0.113.20: pending"), "a pending record");
+
+  const stale = await at("/instances/gw-host", pd({ lastAnswerAt: 1790000300, lastAttemptAt: 1790000900, lastError: "parent unreachable",
+    records: [{ name: "app.example.com", type: "A", values: ["203.0.113.20"], status: "published" }] }));
+  check(stale.html.includes("data-parent-dns-error") && stale.text.includes("the last one the parent gave"), "an outage keeps the last answer and says so");
+  const never = await at("/instances/gw-host", pd({ lastError: "parent unreachable" }));
+  check(never.html.includes('data-parent-dns="none"') && never.text.includes("has not answered yet"), "never answered is not 'nothing published'");
+  const unasked = await at("/instances/gw-host", pd({ unasked: "this hz's public IP is unknown" }));
+  check(unasked.html.includes('data-parent-dns="unasked"') && unasked.text.includes("public IP is unknown"), "an unknown set is not asked, and says why");
+  const off = await at("/instances/gw-host", pd({ enabled: false, off: "upstream.instance is not set" }));
+  check(off.html.includes('data-parent-dns="off"'), "no instance name: off, with the reason");
+  const plain = await at("/instances/gw-host", [inst({})]);
+  check(!plain.html.includes("data-parent-dns"), "an hz with no upstream shows no parent DNS");
+}
+
+console.log(`\n${checks - failures}/${checks} checks passed`);
+if (failures > 0) {
+  throw new Error(`${failures} instances render check(s) failed`);
+}

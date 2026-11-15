@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -57,6 +58,8 @@ type hz struct {
 
 	// configStatus, when non-zero, is returned instead of a config.
 	configStatus int
+	// configDenied adds DeniedHeader to the configStatus answer.
+	configDenied bool
 
 	// configBody, when set, is returned verbatim instead of a config.
 	configBody string
@@ -142,7 +145,7 @@ func (h *hz) handlePoll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// hz knows the registration's own address; the test only ever runs one.
-	h.answer(w, id, RegisterRequest{PublicKey: pub, Environment: "prod", App: "redline", Role: "app"})
+	h.answer(w, id, RegisterRequest{PublicKey: pub, Project: "acme", Environment: "prod", App: "redline", Role: "app"})
 }
 
 func (h *hz) answer(w http.ResponseWriter, id string, req RegisterRequest) {
@@ -181,6 +184,9 @@ func (h *hz) handleConfig(w http.ResponseWriter, r *http.Request) {
 	defer h.mu.Unlock()
 
 	if h.configStatus != 0 {
+		if h.configDenied {
+			w.Header().Set(DeniedHeader, "registration")
+		}
 		http.Error(w, "hz is having a day", h.configStatus)
 		return
 	}
@@ -194,7 +200,7 @@ func (h *hz) handleConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	resp, err := h.config(req, h.key(EnvKeyAddr{Environment: req.Environment, App: req.App, Role: req.Role}))
+	resp, err := h.config(req, h.key(EnvKeyAddr{Project: req.Project, Environment: req.Environment, App: req.App, Role: req.Role}))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -223,6 +229,7 @@ func newClient(t *testing.T, h *hz, mutate func(*Options)) *Client {
 		BaseURL:      h.srv.URL,
 		StateDir:     t.TempDir(),
 		Machine:      "box-1",
+		Project:      "acme",
 		Environment:  "prod",
 		App:          "redline",
 		Role:         "app",
@@ -286,7 +293,7 @@ func TestEnrolApproveResolve(t *testing.T) {
 	}
 	// The address is the path.
 	for _, name := range []string{envKeyName, cacheName} {
-		p := filepath.Join(c.State().Root(), "prod", "redline", "app", name)
+		p := filepath.Join(c.State().Root(), "acme", "prod", "redline", "app", name)
 		if _, err := os.Stat(p); err != nil {
 			t.Errorf("%s: %v", p, err)
 		}
@@ -338,7 +345,7 @@ func TestEnrolPollsUntilApproved(t *testing.T) {
 // Recipient, ECDH and kind are all correct; only the address is not.
 func TestGrantRelayedToTheWrongAddressFails(t *testing.T) {
 	h := newHZ(t)
-	h.wrapFor = &EnvKeyAddr{Environment: "prod", App: "redline", Role: "ops"}
+	h.wrapFor = &EnvKeyAddr{Project: "acme", Environment: "prod", App: "redline", Role: "ops"}
 	c := newClient(t, h, nil)
 
 	err := c.Enrol(ctx(t))
@@ -588,7 +595,7 @@ func TestPartialDecryptFailsWhole(t *testing.T) {
 		t.Errorf("the failure should have fallen back and found no cache: %v", err)
 	}
 	// Nothing was applied, so nothing was cached.
-	if _, err := os.Stat(filepath.Join(c.State().Root(), "prod", "redline", "app", cacheName)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(c.State().Root(), "acme", "prod", "redline", "app", cacheName)); !os.IsNotExist(err) {
 		t.Errorf("a failed config must not be cached: %v", err)
 	}
 }
@@ -598,7 +605,7 @@ func TestPartialDecryptFailsWhole(t *testing.T) {
 func TestValueSealedForAnotherAddressFails(t *testing.T) {
 	h := newHZ(t)
 	h.config = func(req ConfigRequest, k EnvKey) (ConfigResponse, error) {
-		elsewhere := Addr{Environment: "staging", App: req.App, Role: req.Role, Key: "DB_PASSWORD"}
+		elsewhere := Addr{Project: req.Project, Environment: "staging", App: req.App, Role: req.Role, Key: "DB_PASSWORD"}
 		return ConfigResponse{
 			ConfigID: "cfg",
 			Sequence: 1,
@@ -629,7 +636,7 @@ func TestCacheIsNotReadableAtAnotherAddress(t *testing.T) {
 
 	// A second registration on the same box, at a different role, holding the
 	// very same key material.
-	ops := EnvKeyAddr{Environment: "prod", App: "redline", Role: "ops"}
+	ops := EnvKeyAddr{Project: "acme", Environment: "prod", App: "redline", Role: "ops"}
 	key, err := c.State().EnvKey(c.Addr())
 	if err != nil {
 		t.Fatal(err)
@@ -637,11 +644,11 @@ func TestCacheIsNotReadableAtAnotherAddress(t *testing.T) {
 	if err := c.State().PutEnvKey(ops, key); err != nil {
 		t.Fatal(err)
 	}
-	blob, err := os.ReadFile(filepath.Join(root, "prod", "redline", "app", cacheName))
+	blob, err := os.ReadFile(filepath.Join(root, "acme", "prod", "redline", "app", cacheName))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(root, "prod", "redline", "ops", cacheName), blob, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "acme", "prod", "redline", "ops", cacheName), blob, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -666,6 +673,24 @@ func TestCacheIsNotReadableAtAnotherAddress(t *testing.T) {
 	if _, err := staging.State().EnvKey(staging.Addr()); !errors.Is(err, ErrNotEnrolled) {
 		t.Errorf("EnvKey at staging = %v, want ErrNotEnrolled", err)
 	}
+
+	// Nor does another PROJECT's rung of the same name. Before the project
+	// coordinate this was not even expressible: globex's prod/redline/app WAS
+	// acme's, one directory holding one key, and the cache opened.
+	globex := EnvKeyAddr{Project: "globex", Environment: "prod", App: "redline", Role: "app"}
+	if err := c.State().PutEnvKey(globex, key); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "globex", "prod", "redline", "app", cacheName), blob, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	other := newClient(t, h, func(o *Options) {
+		o.StateDir = root
+		o.Project = "globex"
+	})
+	if _, err := other.Load(ctx(t)); !errors.Is(err, ErrDecrypt) {
+		t.Fatalf("another project's cache must not open, even holding the same key: %v", err)
+	}
 }
 
 // TestCacheNeverGoesStale: rule 1. No TTL, no expiry, no age check anywhere —
@@ -677,7 +702,7 @@ func TestCacheNeverGoesStale(t *testing.T) {
 	if _, err := c.Load(ctx(t)); err != nil {
 		t.Fatal(err)
 	}
-	cachePath := filepath.Join(c.State().Root(), "prod", "redline", "app", cacheName)
+	cachePath := filepath.Join(c.State().Root(), "acme", "prod", "redline", "app", cacheName)
 	long := time.Now().Add(-3 * 365 * 24 * time.Hour)
 	if err := os.Chtimes(cachePath, long, long); err != nil {
 		t.Fatal(err)
@@ -894,7 +919,7 @@ func TestAbsentAndEmptyAreDistinguishable(t *testing.T) {
 
 func TestNewValidatesOptions(t *testing.T) {
 	dir := t.TempDir()
-	base := Options{BaseURL: "http://hz", StateDir: dir, Machine: "b", Environment: "prod", App: "redline", Role: "app", Version: testVersion}
+	base := Options{BaseURL: "http://hz", StateDir: dir, Machine: "b", Project: "acme", Environment: "prod", App: "redline", Role: "app", Version: testVersion}
 
 	cases := []struct {
 		name   string
@@ -979,5 +1004,87 @@ func TestTheBoxCanSayItsOwnFingerprint(t *testing.T) {
 	}
 	if want := FingerprintOf(priv.PublicKey()).String(); fp != want {
 		t.Fatalf("Fingerprint = %q, want %q — it does not describe this box's key", fp, want)
+	}
+}
+
+// TestRejectedConfigNeverReplacesTheCache: Options.Accept runs BEFORE the
+// config is cached, so a bad blessing falls back to the good last-known-good
+// and leaves it in place — a later boot with hz unreachable still gets the
+// good one (redline's ask, 2026-10-01).
+func TestRejectedConfigNeverReplacesTheCache(t *testing.T) {
+	h := newHZ(t)
+	serve := func(seq int64, password string) {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		h.config = func(req ConfigRequest, k EnvKey) (ConfigResponse, error) {
+			return ConfigResponse{
+				ConfigID: "cfg-" + strconv.FormatInt(seq, 10), Sequence: seq, MinVer: "1.0.0",
+				Entries: []ConfigEntry{sealEntry(t, k, req.Addr("DB_PASSWORD"), BindingEnv, password)},
+			}, nil
+		}
+	}
+	accept := func(o *Options) {
+		o.Accept = func(c *Config) error {
+			if v, _ := c.Lookup("DB_PASSWORD"); v == "bad" {
+				return errors.New("DB_PASSWORD fails validation")
+			}
+			return nil
+		}
+	}
+	c := newClient(t, h, accept)
+
+	serve(1, "good")
+	if cfg, err := c.Load(ctx(t)); err != nil || cfg.Source != SourceServer {
+		t.Fatalf("first load: %+v, %v", cfg, err)
+	}
+
+	serve(2, "bad")
+	cfg, err := c.Load(ctx(t))
+	if err != nil {
+		t.Fatalf("a rejected config must fall back to the cache, not fail: %v", err)
+	}
+	if v, _ := cfg.Lookup("DB_PASSWORD"); cfg.Source != SourceCache || v != "good" || !errors.Is(cfg.Degraded, ErrRejected) {
+		t.Fatalf("after a rejection: source %s, value %q, degraded %v", cfg.Source, v, cfg.Degraded)
+	}
+
+	// The next boot, hz unreachable: the cache still holds the GOOD config.
+	h.set(func() { h.configStatus = http.StatusInternalServerError })
+	rebooted := newClient(t, h, func(o *Options) { accept(o); o.StateDir = c.State().Root() })
+	cfg, err = rebooted.Load(ctx(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := cfg.Lookup("DB_PASSWORD"); v != "good" || cfg.Sequence != 1 {
+		t.Fatalf("the rejected config replaced the cache: value %q, sequence %d", v, cfg.Sequence)
+	}
+
+	// The rejection raised no floor: hz fixing the blessing AT sequence 2 is accepted.
+	h.set(func() { h.configStatus = 0 })
+	serve(2, "fixed")
+	if cfg, err = rebooted.Load(ctx(t)); err != nil || cfg.Source != SourceServer || cfg.Sequence != 2 {
+		t.Fatalf("a fixed blessing at the rejected sequence: %+v, %v", cfg, err)
+	}
+}
+
+// TestRevokedBoxRefusesOnlyOnTheMarkedDenial: an enrolled box learns of a
+// revocation from /cm/config. Only a 403 carrying DeniedHeader is a denial; a
+// plain 403 (the peer gate: VPN down, wrong source address) still boots the
+// cache, or a network fault would take the box down (#5).
+func TestRevokedBoxRefusesOnlyOnTheMarkedDenial(t *testing.T) {
+	h := newHZ(t)
+	c := newClient(t, h, nil)
+	if _, err := c.Load(ctx(t)); err != nil {
+		t.Fatal(err)
+	}
+
+	h.set(func() { h.configStatus = http.StatusForbidden; h.configDenied = false })
+	cfg, err := c.Load(ctx(t))
+	if err != nil || cfg.Source != SourceCache {
+		t.Fatalf("an unmarked 403 must boot the cache: %+v, %v", cfg, err)
+	}
+
+	h.set(func() { h.configStatus = http.StatusForbidden; h.configDenied = true })
+	if _, err := c.Load(ctx(t)); !errors.Is(err, ErrDenied) {
+		t.Fatalf("a marked 403 is a revocation, want ErrDenied, got %v", err)
 	}
 }

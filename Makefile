@@ -56,6 +56,13 @@ build-hz:
 build-probe:
 	CGO_ENABLED=0 go build $(LDFLAGS) -o hz-probe ./cmd/hz-probe
 
+# Build hz-agent, the privileged on-box half. It ships inert: the unit it
+# installs is neither enabled nor started and carries no apply flag, so putting
+# it on a live gateway changes nothing that runs. See cmd/hz-agent/main.go.
+.PHONY: build-agent
+build-agent:
+	CGO_ENABLED=0 go build $(LDFLAGS) -o hz-agent ./cmd/hz-agent
+
 .PHONY: build-probe-all
 build-probe-all: dist
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64        go build $(LDFLAGS) -o dist/hz-probe-linux-amd64 ./cmd/hz-probe
@@ -63,8 +70,9 @@ build-probe-all: dist
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7  go build $(LDFLAGS) -o dist/hz-probe-linux-armv7 ./cmd/hz-probe
 
 # Cross-compile the client binaries the server embeds: hz (served at
-# /admin/hz/bin/) and hz-probe (served at /admin/hz-probe/bin/). Always builds
-# all served arches regardless of the server's own arch.
+# /admin/hz/bin/), hz-probe (/admin/hz-probe/bin/) and hz-agent
+# (/admin/hz-agent/bin/). Always builds all served arches regardless of the
+# server's own arch.
 .PHONY: ui-embed
 ui-embed: ui/dist/index.html
 	@rm -rf $(UI_EMBED_DIR)
@@ -82,6 +90,9 @@ hz-embed:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64        go build $(LDFLAGS) -o $(HZ_EMBED_DIR)/hz-probe-linux-amd64 ./cmd/hz-probe
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64        go build $(LDFLAGS) -o $(HZ_EMBED_DIR)/hz-probe-linux-arm64 ./cmd/hz-probe
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7  go build $(LDFLAGS) -o $(HZ_EMBED_DIR)/hz-probe-linux-arm ./cmd/hz-probe
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64        go build $(LDFLAGS) -o $(HZ_EMBED_DIR)/hz-agent-linux-amd64 ./cmd/hz-agent
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64        go build $(LDFLAGS) -o $(HZ_EMBED_DIR)/hz-agent-linux-arm64 ./cmd/hz-agent
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7  go build $(LDFLAGS) -o $(HZ_EMBED_DIR)/hz-agent-linux-arm ./cmd/hz-agent
 
 # Run backend + frontend dev servers together (Ctrl-C stops both)
 .PHONY: run
@@ -125,10 +136,29 @@ build-linux-arm64: ui dist hz-embed ui-embed
 build-linux-arm: ui dist hz-embed ui-embed
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -tags $(SERVER_TAGS) $(LDFLAGS) -o dist/$(BINARY_NAME)-linux-armv7 $(CMD_PATH)
 
+# Server binaries for NESTED hz children (internal/server/childbin.go). The
+# parent cannot embed itself, so it holds these on disk and a fresh child
+# downloads its platform's over the upstream VPN. Each gets a manifest the
+# parent re-checks the file against; a partial upload reads as missing.
+CHILD_PLATFORMS=linux-amd64 linux-arm64
+.PHONY: child-bins
+child-bins: build-linux-amd64 build-linux-arm64
+	@for p in $(CHILD_PLATFORMS); do \
+	  sum=$$(sha256sum dist/$(BINARY_NAME)-$$p | cut -d' ' -f1); \
+	  printf '{"version":"%s","sha256":"%s"}\n' "$(VERSION)" "$$sum" > dist/$(BINARY_NAME)-$$p.json; \
+	  echo "child binary $$p: $(VERSION) $$sum"; \
+	done
+
+# Upload them to a parent hz without deploying it: make child-bins-upload HOST=user@host
+.PHONY: child-bins-upload
+child-bins-upload:
+	@test -n "$(HOST)" || { echo "usage: make child-bins-upload HOST=user@parent-hz"; exit 2; }
+	./bin/deploy --host $(HOST) --child-bins-only
+
 # Clean build artifacts
 .PHONY: clean
 clean:
-	rm -f $(BINARY_NAME) hz hz-probe
+	rm -f $(BINARY_NAME) hz hz-probe hz-agent
 	rm -rf dist/
 	rm -rf ui/dist/
 	rm -rf $(HZ_EMBED_DIR)
@@ -137,6 +167,16 @@ clean:
 .PHONY: test
 test:
 	go test -v ./...
+
+# Run the UI's drift-screen checks. The UI has no test framework and this is
+# not one: it is two plain Node programs. One asserts the pure decisions (the
+# four report states, the generation outcomes, the change kinds, the firewall
+# absences) have not collapsed into fewer; the other renders the components
+# with react-dom/server and asserts an observed value never reaches the page
+# without its age. tsc can see neither. Needs `pnpm install` in ui/ first.
+.PHONY: test-ui
+test-ui:
+	cd ui && pnpm test
 
 # Run unit tests only
 .PHONY: test-unit

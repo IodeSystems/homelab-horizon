@@ -25,11 +25,7 @@ func (s *Server) handleAPIAddPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		Name     string `json:"name"`
-		ExtraIPs string `json:"extraIPs"`
-		Profile  string `json:"profile"`
-	}
+	var req apitypes.PeerAddReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "Invalid JSON")
 		return
@@ -40,10 +36,43 @@ func (s *Server) handleAPIAddPeer(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "Name required")
 		return
 	}
+	// A name is the peer's identity everywhere hz keys by it (profile,
+	// project, VPN admin, owner); two peers sharing one share all of those.
+	if err := s.checkNewPeerName(name); err != nil {
+		writeJSONError(w, http.StatusConflict, err.Error())
+		return
+	}
+	// Before the peer exists: wg0.conf is written by AddPeer below, and a
+	// refusal from Save after it would leave a client nobody attributed.
+	project := strings.TrimSpace(req.Project)
+	if err := s.cfg().CheckProjectRef(project); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	extraIPs := strings.TrimSpace(req.ExtraIPs)
 	profile := strings.TrimSpace(req.Profile)
 	if profile == "" {
 		profile = config.ProfileLanAccess
+	}
+	if err := s.cfg().CheckPeerProfileChange(name, profile); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	// An upstream client is refused here, before anything is written, when
+	// the address it would be handed could not answer — a config that
+	// reaches nothing is worse than no config.
+	parentURL := ""
+	if profile == config.ProfileUpstream {
+		if extraIPs != "" {
+			writeJSONError(w, http.StatusBadRequest, "an upstream client routes nothing behind it — extra allowed IPs would make the gateway route those subnets to a nested hz")
+			return
+		}
+		u, err := s.upstreamParentURL()
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		parentURL = u
 	}
 
 	privKey, pubKey, err := wireguard.GenerateKeyPair()
@@ -71,16 +100,14 @@ func (s *Server) handleAPIAddPeer(w http.ResponseWriter, r *http.Request) {
 	wgPeers := s.snapshotWGPeers()
 	if err := s.updateConfig(func(cfg *config.Config) {
 		cfg.SetPeerProfile(name, profile)
+		cfg.SetPeerProject(name, project)
 		cfg.WGPeers = wgPeers
 	}); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
 		return
 	}
 
-	if err := s.wg.Reload(); err != nil {
-		slog.Warn("wg.Reload", "err", err)
-	}
-	s.rebuildWGChains()
+	s.applyPeerChange() // wg reload + chain rebuild
 
 	// Record whose device this is, when a person rather than a token created
 	// it. Best effort: the peer exists and works regardless, and failing the
@@ -98,9 +125,11 @@ func (s *Server) handleAPIAddPeer(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(apitypes.AddPeerResponse{
-		OK:     true,
-		Config: clientConfig,
-		QRCode: qrCode,
+		OK:        true,
+		Config:    clientConfig,
+		QRCode:    qrCode,
+		PublicKey: pubKey,
+		ParentURL: parentURL,
 	})
 }
 
@@ -114,12 +143,7 @@ func (s *Server) handleAPIEditPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		PublicKey string `json:"publicKey"`
-		Name      string `json:"name"`
-		ExtraIPs  string `json:"extraIPs"`
-		Profile   string `json:"profile"`
-	}
+	var req apitypes.PeerEditReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "Invalid JSON")
 		return
@@ -135,10 +159,41 @@ func (s *Server) handleAPIEditPeer(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "Name required")
 		return
 	}
+	// nil leaves the attribution alone; checked before wg0.conf is touched.
+	var project *string
+	if req.Project != nil {
+		p := strings.TrimSpace(*req.Project)
+		if err := s.cfg().CheckProjectRef(p); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		project = &p
+	}
 
 	peer := s.wg.GetPeerByPublicKey(pubkey)
 	if peer == nil {
 		writeJSONError(w, http.StatusNotFound, "Peer not found")
+		return
+	}
+	// A rename may not take another peer's name.
+	if !strings.EqualFold(name, peer.Name) {
+		if err := s.checkNewPeerName(name); err != nil {
+			writeJSONError(w, http.StatusConflict, err.Error())
+			return
+		}
+	}
+	// Checked against the peer's CURRENT name (a link names it) and before
+	// wg0.conf is touched, for the reason CheckPeerProfileChange gives.
+	profile := strings.TrimSpace(req.Profile)
+	if profile == "" {
+		profile = config.ProfileLanAccess
+	}
+	if err := s.cfg().CheckPeerProfileChange(peer.Name, profile); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if profile == config.ProfileUpstream && strings.TrimSpace(req.ExtraIPs) != "" {
+		writeJSONError(w, http.StatusBadRequest, "an upstream client routes nothing behind it — extra allowed IPs would make the gateway route those subnets to a nested hz")
 		return
 	}
 
@@ -167,10 +222,6 @@ func (s *Server) handleAPIEditPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	profile := strings.TrimSpace(req.Profile)
-	if profile == "" {
-		profile = config.ProfileLanAccess
-	}
 	oldName := peer.Name
 	wgPeers := s.snapshotWGPeers()
 	if err := s.updateConfig(func(cfg *config.Config) {
@@ -182,9 +233,14 @@ func (s *Server) handleAPIEditPeer(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			cfg.RenamePeerProfile(oldName, name)
+			cfg.RenamePeerProject(oldName, name)
 			cfg.RenameMFAPeer(oldName, name)
+			cfg.RenameUpstreamClient(oldName, name)
 		}
 		cfg.SetPeerProfile(name, profile)
+		if project != nil {
+			cfg.SetPeerProject(name, *project)
+		}
 		cfg.WGPeers = wgPeers
 	}); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
@@ -226,6 +282,17 @@ func (s *Server) handleAPIDeletePeer(w http.ResponseWriter, r *http.Request) {
 	// Look up peer name before removing so we can clean up profile
 	peer := s.wg.GetPeerByPublicKey(req.PublicKey)
 
+	// A nested hz's link is refused here, before wg0.conf is touched: the
+	// machine would name a client that no longer exists, and every later
+	// Save would be refused for it. The machine's removal (cascade) is the
+	// path that takes the client with it, and says so in its dry run.
+	if peer != nil {
+		if m := s.cfg().UpstreamLinkOf(peer.Name); m != "" {
+			writeJSONError(w, http.StatusConflict, fmt.Sprintf("%s is the VPN client of nested hz %s. Remove %s with cascade, which removes this client too", peer.Name, m, m))
+			return
+		}
+	}
+
 	if err := s.wg.RemovePeer(req.PublicKey); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -239,6 +306,7 @@ func (s *Server) handleAPIDeletePeer(w http.ResponseWriter, r *http.Request) {
 	if err := s.updateConfig(func(cfg *config.Config) {
 		if peerName != "" {
 			cfg.DeletePeerProfile(peerName)
+			cfg.DeletePeerProject(peerName)
 			cfg.DeleteMFAPeer(peerName)
 		}
 		cfg.WGPeers = wgPeers
@@ -266,9 +334,7 @@ func (s *Server) handleAPIToggleAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		Name string `json:"name"`
-	}
+	var req apitypes.ToggleAdminReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "Invalid JSON")
 		return
@@ -286,6 +352,25 @@ func (s *Server) handleAPIToggleAdmin(w http.ResponseWriter, r *http.Request) {
 			isCurrentlyAdmin = true
 			break
 		}
+	}
+	// No admin field: flip (the UI's chip). An admin field: SET — idempotent,
+	// so a re-run cannot undo it. `vpn add --vpn-admin` sends one; it used to
+	// flip, and a second run of the same command demoted the client.
+	want := !isCurrentlyAdmin
+	if req.Admin != nil {
+		want = *req.Admin
+	}
+	if want == isCurrentlyAdmin {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(apitypes.ToggleAdminResponse{OK: true, IsAdmin: want})
+		return
+	}
+	// A VPN admin is signed in to hz's API by its address alone
+	// (isVPNAdmin), and hz's API is the one thing an upstream client reaches.
+	// Demoting is always allowed.
+	if want && s.cfg().GetPeerProfile(clientName) == config.ProfileUpstream {
+		writeJSONError(w, http.StatusBadRequest, clientName+" is an upstream client (a nested hz). It cannot be a VPN admin: that would sign whoever holds that box in to this hz's API with no credential")
+		return
 	}
 
 	if err := s.updateConfig(func(cfg *config.Config) {
@@ -315,7 +400,7 @@ func (s *Server) handleAPIToggleAdmin(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(apitypes.ToggleAdminResponse{
 		OK:      true,
-		IsAdmin: !isCurrentlyAdmin,
+		IsAdmin: want,
 	})
 }
 
@@ -366,11 +451,8 @@ func (s *Server) handleAPISetPeerProfile(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	switch profile {
-	case config.ProfileLanAccess, config.ProfileFullTunnel, config.ProfileVPNOnly:
-		// valid
-	default:
-		writeJSONError(w, http.StatusBadRequest, "Invalid profile: must be lan-access, full-tunnel, or vpn-only")
+	if err := s.cfg().CheckPeerProfileChange(name, profile); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -390,6 +472,13 @@ func (s *Server) handleAPISetPeerProfile(w http.ResponseWriter, r *http.Request)
 // when fleet peers have VPNRange configured (site-to-site topology).
 func (s *Server) generateClientConfig(clientPrivKey, clientIP, profile string) string {
 	cfg := s.cfg()
+
+	// Upstream first: one site, the gateway's WG address /32, no DNS — the
+	// address the rules admit, from the same source the rules read it from.
+	if profile == config.ProfileUpstream {
+		return wireguard.GenerateUpstreamClientConfig(
+			clientPrivKey, clientIP, cfg.ServerPublicKey, cfg.ServerEndpoint, s.gatewayWGIP())
+	}
 
 	// Check if any fleet peer has VPNRange — if so, multi-site mode.
 	var sites []wireguard.SitePeer
@@ -419,6 +508,16 @@ func (s *Server) generateClientConfig(clientPrivKey, clientIP, profile string) s
 		cfg.ServerPublicKey, cfg.ServerEndpoint,
 		cfg.DNS, cfg.GetAllowedIPsForProfile(profile),
 	)
+}
+
+// gatewayWGIP is this gateway's address on wg0, read the way every
+// iptables.Inputs.ServerWGIP is (wg0.conf's Address, mask dropped), so an
+// upstream client's config and the rule that admits it name one address.
+func (s *Server) gatewayWGIP() string {
+	if s.wg == nil {
+		return ""
+	}
+	return strings.TrimSpace(strings.Split(s.wg.GetAddress(), "/")[0])
 }
 
 // rebuildWGChains rebuilds both horizon-owned iptables chains from the current
@@ -462,53 +561,6 @@ func (s *Server) wgChainOpts() wireguard.ForwardChainOpts {
 		ServerWGIP:   strings.TrimSpace(strings.Split(s.wg.GetAddress(), "/")[0]),
 		ListenPort:   listenPort,
 	}
-}
-
-func (s *Server) handleAPIListInvites(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) {
-		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
-		return
-	}
-
-	tokens := s.getInvites()
-
-	invites := make([]apitypes.InviteResp, 0, len(tokens))
-	for _, token := range tokens {
-		url := strings.TrimSuffix(s.cfg().KioskURL, "/") + "/invite/" + token
-		invites = append(invites, apitypes.InviteResp{
-			Token: token,
-			URL:   url,
-		})
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(invites)
-}
-
-func (s *Server) handleAPICreateInvite(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) {
-		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
-		return
-	}
-	if r.Method != http.MethodPost {
-		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
-		return
-	}
-
-	token := generateToken(32)
-	if err := s.addInvite(token); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	url := strings.TrimSuffix(s.cfg().KioskURL, "/") + "/invite/" + token
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(apitypes.CreateInviteResponse{
-		OK:    true,
-		Token: token,
-		URL:   url,
-	})
 }
 
 func (s *Server) handleAPIGetPeerConfig(w http.ResponseWriter, r *http.Request) {
@@ -566,9 +618,7 @@ func (s *Server) handleAPIRekeyPeer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		PublicKey string `json:"publicKey"`
-	}
+	var req apitypes.RekeyPeerReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "Invalid JSON")
 		return
@@ -631,34 +681,32 @@ func (s *Server) handleAPIRekeyPeer(w http.ResponseWriter, r *http.Request) {
 
 	qrCode := qr.GenerateSVG(clientConfig, 256)
 
-	// Create a config share link automatically
-	token := generateToken(32)
+	resp := apitypes.RekeyPeerResponse{OK: true, Config: clientConfig, QRCode: qrCode}
 
-	// Remove any existing share for this peer
+	// A share link is an unauthenticated URL on the kiosk that serves this
+	// client's full config, private key included, until revoked or hz
+	// restarts. Only when the admin asks for one. Any share for this peer is
+	// removed either way: it carries the key just replaced.
 	s.configSharesMu.Lock()
 	for t, share := range s.configShares {
 		if share.PeerName == peer.Name {
 			delete(s.configShares, t)
 		}
 	}
-	s.configShares[token] = &configShare{
-		Token:    token,
-		PeerName: peer.Name,
-		Config:   clientConfig,
-		QRCode:   qrCode,
+	if req.Share {
+		resp.ShareToken = generateToken(32)
+		s.configShares[resp.ShareToken] = &configShare{
+			Token:    resp.ShareToken,
+			PeerName: peer.Name,
+			Config:   clientConfig,
+			QRCode:   qrCode,
+		}
+		resp.ShareURL = strings.TrimSuffix(s.cfg().KioskURL, "/") + "/share/" + resp.ShareToken
 	}
 	s.configSharesMu.Unlock()
 
-	shareURL := strings.TrimSuffix(s.cfg().KioskURL, "/") + "/share/" + token
-
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(apitypes.RekeyPeerResponse{
-		OK:         true,
-		Config:     clientConfig,
-		QRCode:     qrCode,
-		ShareToken: token,
-		ShareURL:   shareURL,
-	})
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) handleAPIListConfigShares(w http.ResponseWriter, r *http.Request) {
@@ -709,38 +757,6 @@ func (s *Server) handleAPIDeleteConfigShare(w http.ResponseWriter, r *http.Reque
 	s.configSharesMu.Lock()
 	delete(s.configShares, req.Token)
 	s.configSharesMu.Unlock()
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
-}
-
-func (s *Server) handleAPIDeleteInvite(w http.ResponseWriter, r *http.Request) {
-	if !s.isAdmin(r) {
-		writeJSONError(w, http.StatusUnauthorized, "Unauthorized")
-		return
-	}
-	if r.Method != http.MethodPost {
-		writeJSONError(w, http.StatusMethodNotAllowed, "POST required")
-		return
-	}
-
-	var req struct {
-		Token string `json:"token"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONError(w, http.StatusBadRequest, "Invalid JSON")
-		return
-	}
-
-	if req.Token == "" {
-		writeJSONError(w, http.StatusBadRequest, "Token required")
-		return
-	}
-
-	if err := s.removeInvite(req.Token); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})

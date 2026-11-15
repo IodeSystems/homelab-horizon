@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -20,6 +21,8 @@ import (
 // takes every default never types a path.
 const (
 	defaultTokenFile = "/etc/hz-probe/token"
+	defaultNtfyFile  = "/etc/hz-probe/ntfy-url"
+	defaultNtfyToken = "/etc/hz-probe/ntfy-token"
 	defaultStatePath = "/var/lib/hz-probe/state.json"
 	defaultCertPath  = "/etc/hz-probe/cert.pem"
 	defaultKeyPath   = "/etc/hz-probe/key.pem"
@@ -37,6 +40,12 @@ type serveFlags struct {
 	tlsCert   string
 	tlsKey    string
 	pushTo    string
+
+	ntfyURL       string
+	ntfyFile      string
+	ntfyAfter     int
+	ntfyToken     string
+	ntfyTokenFile string
 }
 
 func (f *serveFlags) register(fs *flag.FlagSet) {
@@ -48,12 +57,28 @@ func (f *serveFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&f.tlsCert, "tls-cert", defaultCertPath, "TLS certificate file")
 	fs.StringVar(&f.tlsKey, "tls-key", defaultKeyPath, "TLS key file")
 	fs.StringVar(&f.pushTo, "push-to", "", "hz base URL to report results to; when set, the agent reports rather than listening")
+	fs.StringVar(&f.ntfyURL, "ntfy-url", "", "ntfy topic URL to alert when hz is unreachable (prefer --ntfy-url-file); push mode only — in pull mode the agent never dials hz, so it cannot see hz down")
+	fs.StringVar(&f.ntfyFile, "ntfy-url-file", defaultNtfyFile, "file holding the ntfy topic URL; absent means no vantage-side alerting. Push mode only")
+	fs.IntVar(&f.ntfyAfter, "ntfy-after", 3, "consecutive failed reports to hz before alerting ntfy. Push mode only")
+	fs.StringVar(&f.ntfyToken, "ntfy-token", "", "ntfy access token, sent as a Bearer header (prefer --ntfy-token-file). Push mode only")
+	fs.StringVar(&f.ntfyTokenFile, "ntfy-token-file", defaultNtfyToken, "file holding the ntfy access token; absent means ntfy is posted to without one. Push mode only")
 }
 
 // pushMode reports whether the agent reports to hz instead of waiting to be
 // asked. It is the default the installer configures, because it needs no
 // public address, no inbound rule and no certificate of its own.
 func (f *serveFlags) pushMode() bool { return strings.TrimSpace(f.pushTo) != "" }
+
+// updateFlagPath is where the agent raises update-wanted: beside its state
+// file, in its own StateDirectory, the one place a DynamicUser can write.
+// install points the root path unit at the same path and update removes it,
+// both from the same --state, so the three cannot disagree.
+func (f *serveFlags) updateFlagPath() string {
+	if strings.TrimSpace(f.statePath) == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(f.statePath), probe.UpdateFlagName)
+}
 
 // vantageName is the configured name, or this host's.
 func (f *serveFlags) vantageName() string {
@@ -91,13 +116,61 @@ func runServe(args []string) error {
 	// this host, so there is no port to open, no certificate to serve and no
 	// address to keep stable.
 	if f.pushMode() {
-		pusher := &probe.Pusher{URL: f.pushTo, Token: tok}
+		pusher := &probe.Pusher{URL: f.pushTo, Token: tok, UpdateFlag: f.updateFlagPath()}
+		fileSet, tokenFileSet := false, false
+		fs.Visit(func(fl *flag.Flag) {
+			switch fl.Name {
+			case "ntfy-url-file":
+				fileSet = true
+			case "ntfy-token-file":
+				tokenFileSet = true
+			}
+		})
+		ntfy, err := resolveNtfyURL(f.ntfyURL, f.ntfyFile, fileSet)
+		if err != nil {
+			return err
+		}
+		ntfyToken, err := resolveNtfyToken(f.ntfyToken, f.ntfyTokenFile, tokenFileSet)
+		if err != nil {
+			return err
+		}
+		// Precedence: an ntfy URL on THIS host (file, environment, flag) wins
+		// over the channel the operator set in hz. Without one, the agent
+		// alerts wherever hz last said — cached, so it still works with hz
+		// down — and follows hz's changes without a restart.
+		if f.ntfyAfter >= 1 {
+			pusher.AlertThreshold = f.ntfyAfter
+		}
+		if ntfy != "" {
+			if f.ntfyAfter < 1 {
+				return fmt.Errorf("--ntfy-after must be at least 1, got %d", f.ntfyAfter)
+			}
+			pusher.Alert = &probe.Alerter{URL: ntfy, Token: ntfyToken, Vantage: f.vantageName(), Threshold: f.ntfyAfter}
+			// The URL and the token are secrets; log that they are set,
+			// never what they are.
+			slog.Info("hz-probe will alert ntfy if hz is unreachable or rejects this vantage",
+				"source", "host", "after_failures", f.ntfyAfter, "ntfy_token", ntfyToken != "",
+				"precedence", "this host's ntfy URL wins over the alert channel set in hz")
+		} else {
+			if ntfyToken != "" {
+				slog.Warn("hz-probe: an ntfy token is set on this host but no ntfy URL; it is ignored — " +
+					"a channel set in hz carries its own token")
+			}
+			slog.Info("hz-probe will alert the ntfy channel set in hz, if any",
+				"source", "hz", "cached_channel", agent.AlertChannel() != nil,
+				"precedence", "an ntfy URL on this host would win; none is set")
+		}
 		held := agent.Targets()
 		slog.Info("hz-probe reporting to hz",
 			"hz", f.pushTo, "vantage", f.vantageName(), "version", Version,
 			"targets", len(held.Targets), "targets_version", held.Version)
 		agent.PushLoop(ctx, pusher, 0)
 		return nil
+	}
+
+	if strings.TrimSpace(f.ntfyURL) != "" || os.Getenv("HZ_PROBE_NTFY_URL") != "" {
+		slog.Warn("hz-probe: an ntfy URL is set but this agent is in pull mode, where it never dials hz " +
+			"and cannot tell hz is down; it is ignored")
 	}
 
 	srv := &http.Server{
@@ -170,4 +243,72 @@ func resolveToken(tokenFlag, tokenFile string) (string, error) {
 		return tok, nil
 	}
 	return "", fmt.Errorf("no token: run 'hz-probe install' to mint one, set HZ_PROBE_TOKEN, or pass --token")
+}
+
+// resolveNtfyURL reads the optional ntfy topic URL the way resolveToken reads
+// the token: file, then HZ_PROBE_NTFY_URL, then the flag. Unlike the token,
+// finding none is not an error — it is the feature switched off.
+//
+// A file somebody NAMED (`fileSet`) that is empty or unreadable IS an error:
+// that is an intent gone wrong, and silently running without the alert they
+// asked for is the failure this feature exists to prevent.
+//
+// THE DEFAULT PATH IS NOT AN INTENT, and must never stop the agent. Found in
+// production 2026-09-28: a vantage installed before this feature updated
+// itself, its old unit passed no --ntfy-url-file, and the default
+// /etc/hz-probe/ntfy-url sits in a root-only directory — so the DynamicUser
+// got EACCES, not ENOENT, the agent exited, and it crash-looped 16,446 times.
+// An old unit plus a new binary is exactly what self-update produces.
+func resolveNtfyURL(urlFlag, file string, fileSet bool) (string, error) {
+	raw, err := resolveOptional("ntfy URL", "vantage-side alerting is off",
+		urlFlag, "HZ_PROBE_NTFY_URL", file, fileSet)
+	if err != nil || raw == "" {
+		return "", err
+	}
+	if !probe.ValidAlertURL(raw) {
+		// Not echoing the value: it is a secret.
+		return "", fmt.Errorf("the ntfy URL is not an http(s) URL with a host")
+	}
+	return raw, nil
+}
+
+// resolveNtfyToken reads the optional ntfy access token by exactly the rules
+// of resolveNtfyURL: --ntfy-token-file, then HZ_PROBE_NTFY_TOKEN, then
+// --ntfy-token. None is not an error — the topic is posted to without
+// authentication, as before tokens existed. The same 2026-09-28 rule
+// applies: an old unit on a new binary names no --ntfy-token-file, so an
+// unreadable DEFAULT path must warn and carry on, never stop the agent.
+func resolveNtfyToken(tokenFlag, file string, fileSet bool) (string, error) {
+	return resolveOptional("ntfy token", "ntfy is posted to without a token",
+		tokenFlag, "HZ_PROBE_NTFY_TOKEN", file, fileSet)
+}
+
+// resolveOptional is the shared file → environment → flag resolution for an
+// optional secret. `what` names it in errors and `off` says in the warning
+// what running without it means. The value itself is never in a message.
+func resolveOptional(what, off, flagVal, env, file string, fileSet bool) (string, error) {
+	raw := ""
+	if file != "" {
+		b, err := os.ReadFile(file)
+		switch {
+		case err == nil:
+			raw = strings.TrimSpace(string(b))
+			if raw == "" && fileSet {
+				return "", fmt.Errorf("%s file %s is empty", what, file)
+			}
+		case os.IsNotExist(err):
+		case fileSet:
+			return "", fmt.Errorf("could not read %s file: %w", what, err)
+		default:
+			slog.Warn("probe: the default "+what+" file cannot be read; "+off,
+				"path", file, "error", err)
+		}
+	}
+	if raw == "" {
+		raw = strings.TrimSpace(os.Getenv(env))
+	}
+	if raw == "" {
+		raw = strings.TrimSpace(flagVal)
+	}
+	return raw, nil
 }

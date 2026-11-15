@@ -498,30 +498,3 @@ func TestDriftKey(t *testing.T) {
 		}
 	}
 }
-
-func TestReplaceLiveSet(t *testing.T) {
-	live := []dns.Record{
-		{Name: "a.example.com", Type: "A", Value: "1.1.1.1"},
-		{Name: "hz.example.com", Type: "TXT", Value: "old"},
-		{Name: "hz.example.com", Type: "TXT", Value: "keep-sibling"},
-		{Name: "hz.example.com", Type: "A", Value: "2.2.2.2"},
-	}
-	desired := []dns.Record{{Name: "hz.example.com", Type: "TXT", Value: "new"}}
-	out := replaceLiveSet(live, "hz.example.com", "TXT", desired)
-
-	var txt, other []string
-	for _, r := range out {
-		if strings.ToUpper(r.Type) == "TXT" && strings.TrimSuffix(r.Name, ".") == "hz.example.com" {
-			txt = append(txt, r.Value)
-		} else {
-			other = append(other, r.Type+":"+r.Value)
-		}
-	}
-	if !equalStrSlices([]string{"new"}, txt) {
-		t.Errorf("TXT set = %v, want [new] (old + sibling both replaced)", txt)
-	}
-	// A records and the other-zone A must survive untouched.
-	if len(other) != 2 {
-		t.Errorf("non-target records = %v, want 2 preserved", other)
-	}
-}

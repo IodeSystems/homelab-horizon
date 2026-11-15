@@ -4,6 +4,150 @@ Completed trees moved out of [plan.md](plan.md) as they finished. Kept for the
 reasoning, not the status: several of these record *why* a thing is shaped the
 way it is, which the code alone doesn't say.
 
+## Attribution — amendment 6 (2026-09-26)
+
+✅ Merged to `dev`; deployed 2026-09-27 (`2075979`). Every section is attributed to a project or
+is global (`""`, always labelled "global"). Design and decisions:
+[design/ui.md](design/ui.md) Decision 1, amendment 6.
+
+- **Backend** (one agent, Opus): `project` on machines (owner — invariant 6
+  amended to "a machine carries no environment"), VPN clients (a
+  `vpn_projects` map, because `WGPeers` is re-snapshotted from wg0.conf),
+  standalone checks, IP bans, port exclusions; `svc:*` checks and port
+  reservations derive theirs from the service. New `POST /api/v1/machines/set`.
+  Removing a project re-attributes its records to global, never deletes them.
+  `TestAttributionChangesNoRenderedArtifact` renders every gateway artifact and
+  every machine projection with and without attribution: byte-identical.
+- **UI** (parent + five tab agents, Sonnet): ten tabs; each is a table or
+  "No X in <project>." with its Add button, the modal prefilled with the
+  project. Explanation panels deleted (reverses Decision K). One shared
+  reading of `""` as "global" (four agents had each written their own).
+- **Live pass** (hermetic container): one real add per tab from inside a
+  project — machine, check, ban, port exclusion, VPN client (after installing
+  wireguard-tools and a wg0.conf in the container) — each landed in
+  `config.json` attributed to `storefront`.
+- **Found and fixed in the pass:** `/app/<route>/` with a trailing slash 404'd
+  (`fs.ValidPath`, `internal/server/spa.go`) — predates this work; the Add
+  machine dialog was still paragraphs.
+
+Verified: Go 2779 tests + `go vet` + generated types; 20 UI suites green.
+
+**Follow-up, deployed `b4b0fb2`:** pending changes list what changed (`path: before → after`) and no longer count attribution — the operator's report was `aw4 modified since the last Sync` for an edit that was only `project → iode, environment → dev`.
+
+**Open (operator):** the ban-sync fallback (a backup gateway records a ban
+naming a project it does not know yet as global, logged, until the config
+pull); no edit endpoint for checks or bans; service-placed bans are always
+global. Ports screen tabs became two always-visible sections (agent's call).
+
+## UI write surface and the ranked Overview (2026-09-26)
+
+✅ Merged to `dev` and deployed 2026-09-26 (`7a8bb6b`). Built by four sub-agents on worktrees in
+parallel, each reviewed and merged by the parent session.
+
+- **Environments** — `+`, edit and remove on the project Overview's rungs. Add
+  goes into the page's own project; edit/remove act on the rung's OWN project
+  (a descendant's rung can be on screen under the own+descendants scope). Set
+  sends only changed fields; an empty string clears `from`/`version`.
+- **Segments** — Add on both Network tabs; edit and remove per row. Add takes
+  no members: `SegmentAddReq.Members` requires the machine to already name the
+  segment. Membership is addressed afterwards from the row's `unaddressed`
+  list, one immediate action per row; only a CIDR change can strand a member,
+  so only that path goes blocked → cascade → confirm.
+- **Machines** — Add on unscoped `/machines` only (a machine carries no
+  project); remove on `/machines/<name>`, with cascade stated as revoking the
+  agent credential. No `--self` in the browser (invariant 7).
+- **Ranked Overview** — `/` is the "is anything waiting on me?" queue:
+  `rankFleet` over agent observations, pending registrations, DNS drift,
+  failing/warning checks, pending changes. An unanswered source is never read
+  as empty; the headline cannot say "nothing is waiting" while one is unknown.
+  Stat cards cut; HAProxy/SSL/peer-sync kept below the queue.
+
+Every remove is the server's dry run first. Verified: 15 UI suites green on
+`dev`; the hermetic container took one real write per feature (environment,
+machine and segment all landed in `config.json`) and each dialog was looked at.
+
+**⚠ Setup finding:** the agents' worktrees were cut from `origin/main`
+(`36ca2bb`), not `dev`. Three renovate bumps on `main` (#68, #71, #73) rode
+along on two branches; they were cherry-picked AROUND, so `dev` does not have
+them. Bringing `main`'s dependency bumps into `dev` is a separate decision.
+
+**Open, found in the live pass (cosmetic):** the row controls are not one
+style — segment rows use filled red icons, rungs and tree nodes outlined grey,
+and the machine page a text Remove button.
+
+## Nav + route hierarchy, amendment 5 (2026-09-26)
+
+✅ Built on `feat/nav-tabs`, merged to `dev` (`e861662`), deployed 2026-09-26 (`7a8bb6b`). The sidebar is
+WHERE (the project tree, no named root, plus a fixed gateway group, the same at
+every scope); six tabs over the page are WHAT; a project lives at
+`/p/<bare name>/<tab>`. Operator calls: the unscoped Config tab gets a project
+picker; project add/remove is on the tree. Design, decisions reversed (J, L)
+and what the build found: [design/ui.md](design/ui.md), Decision 1,
+amendment 5. Verified: all 12 UI selftest suites green (render check 211/211,
+decisions 188/188), `tsc -b` clean, and a hermetic container walked through
+every tab, the legacy redirect, add and remove.
+
+## Peer-API access control (2026-09-21)
+
+### ✅ An empty peer list now admits nobody
+
+Found 2026-09-21 while investigating HA vs the agent; fixed the same day on
+`fix/peer-api-access`. **Deliberately written as the class of problem, not a
+recipe. This repo is public.**
+
+`internal/server/handlers_peer.go` — the peer API's access check matched
+configured fleet peers by address, and **when no peers were configured it
+widened to the whole VPN CIDR** rather than closing. A standalone gateway is
+the no-peers case, so on every single-gateway deployment the peer API's
+audience was "anything on the VPN" instead of "the other gateways", which is
+what the design intends. The middleware's own doc comment said restricting to
+specific peers rather than the whole CIDR is *"critical ... because it exposes
+private key material"* — and the fallback sat immediately below it.
+
+**Scope, checked rather than assumed:**
+
+- **TLS private keys: were exposed.** The cert route reads and returns key
+  material and nothing migrates it out of reach.
+- **The served config: also a secret channel**, and still is — it serialises
+  the whole config, which carries the zone DNS credentials, the OIDC client
+  secret, the VPN MFA enrolment secrets and the metrics scrape token. Closing
+  the access check is what protects it; it is not a route that can be deleted,
+  because replicating configuration is the feature. `ha-and-the-agent.md` §9.1.
+- **Admin token: NOT exposed on a current gateway.** `server.go:307-316` moves
+  the token to a 0600 file and clears the field before any save. An earlier
+  investigation note said otherwise, reading the struct tag rather than the
+  runtime state. A config that has never booted a version with that migration
+  is a different answer.
+
+**Why it had not bitten:** the routes are unadvertised and nothing in-tree
+calls them without `peer_id` set. That is obscurity, not a control.
+
+**The fix, three parts:**
+
+1. Deny when no peers are configured. Nothing consumes the surface without a
+   fleet — the pull loop, `alivePeers` and ban sync all return early on an
+   empty peer list, and the HA status handler only pings addresses it read out
+   of the peer list — so deny breaks nothing real. Loopback-only was the
+   conservative alternative and was not needed.
+2. **One registration point.** `registerPeerAPI` is now the only place peer
+   routes are registered; it applies the middleware and records each path, so
+   a new route cannot be added without the check.
+3. **The test that hid it.** Every pull-loop test stood the peer API up on a
+   bare mux with the middleware "intentionally bypassed so loopback requests
+   are accepted" — the middleware with the hole was the one middleware no test
+   exercised. Those tests now run the real registration path and admit their
+   caller the way an operator does: by listing its address. Plus a new test
+   that refuses a VPN-range non-peer, and every caller on a standalone
+   gateway, on **every** route enumerated from the registry.
+
+**Remediation, not just the patch:** anyone with VPN access to a gateway that
+ran the old code should be assumed able to have taken its TLS keys and the
+other material on that surface. Rotation is the remediation.
+
+**Follow-on, not done here:** whether the cert-distribution channel should
+exist at all. It is removable — investigation and cost in
+`plan/design/ha-and-the-agent.md` §10.
+
 ## VPN MFA jail (2026-08-12)
 
 ### ✅ MFA jail covers the INPUT path (WG-INPUT chain)
@@ -733,3 +877,1028 @@ told only "Unauthorized" concludes the token is broken and mints another.
 
 Final state: `76 passed, 0 failed` plus `account passkey flow: all checks
 passed`, exit 0.
+
+## Context — the system health + iptables tree (done)
+
+Two gaps surfaced while fixing the "added an eth, nothing works" outage:
+
+1. **System health + fixer dashboard is missing.** Current `SystemTab` in `ui/src/routes/settings.tsx:951` shows four static config fields. The React migration (commit `807364b`) ripped **9 fixer handlers** from the old Go-template UI and kept only `/api/v1/vpn/reload` and `/api/v1/haproxy/reload`. Removed handlers: `handleInstallService`, `handleEnableService`, `handleCreateWGConfig`, `handleDNSReload`, `handleDNSMasqStart`, `handleDNSMasqInit`, `handleInstallRequirement` (apt install), `handleFixWGRules` (iptables/forwarding repair), `handleFixHAProxyLogging`. The Go primitives (`EnableIPForwarding`, `AddMasqueradeRule`, `SetupForwardChain`, `WriteConfig` for each service, `Start`/`Reload` etc.) all still exist — they're orphaned, no HTTP route reaches them.
+2. **Nothing owns iptables.** When the default-route iface changes, MASQUERADE/FORWARD/WG-FORWARD rules pin to the old name and silently break outbound WG and LAN access. A first-attempt ticker was written and then ripped in favor of this model.
+
+The fix is one coherent feature: give the admin back a **system health + fixer + rule inventory** surface where every check has a fix button, horizon owns what it emits, admins bless what's theirs, and everything else is surfaced for review.
+
+### Scope boundary: system vs network checks
+
+This plan covers **system checks only** — is WG installed, is the service running on this host, is this host's iptables consistent, etc. All facts about the machine horizon is running on.
+
+**Network / downstream service health** is a separate concern with its own existing page:
+- `Monitor` package (`internal/monitor/`) runs periodic checks against services (TCP connect, HTTP probe, etc.).
+- `/api/v1/checks` + `/api/v1/checks/history` endpoints.
+- React page at `/checks` (added in commit `662a723`: "dedicated Checks page with history graphs").
+
+Nothing in this plan touches network/downstream checks. No overlap with the `Checks` page or `Monitor`. The System Health tab built here is strictly "is this box's software stack healthy and configured."
+
+### Design — Rule classification model
+
+Every live iptables rule in horizon-relevant tables/chains is classified into exactly one of:
+
+| State | Source | Auto action | UI |
+|---|---|---|---|
+| **expected** | `generate(cfg)` with current iface/CIDR | add if missing | green chip |
+| **stale** | `generate({iface: cfg.LastLocalIface, cidr: cfg.LastLanCIDR})` — same signatures, old inputs | auto-delete | yellow chip, "will remove" |
+| **blessed** | `cfg.BlessedIPTablesRules []string` (canonical form) | never touch | blue chip |
+| **unknown** | anything else | surface only, manual delete from UI | red chip |
+
+`LastLocalIface` / `LastLanCIDR` earn their keep as the stale-rule identifier — they answer "what iface/CIDR were we pinned to last, so we know which drifted rules to clean."
+
+Scope of inspected rules: `nat POSTROUTING`, `filter FORWARD`, `filter WG-FORWARD`, `filter WG-INPUT`, and `filter INPUT` **narrowed to rules that jump to WG-INPUT**. Not a full iptables UI — just the chains horizon touches. INPUT is the exception to "read the whole chain": a normal host's INPUT is full of ufw/docker rules horizon has no opinion on, and classifying them all as `unknown` would bury the tab.
+
+### Phasing
+
+Each phase is independently mergeable and leaves the system in a working state.
+
+#### Phase 0 — System Health + Fixer dashboard (restore lost functionality)
+
+**Goal**: rebuild the pre-React-migration health dashboard with every check paired to its fixer button.
+
+**Per-component inventory** — each row: check → status chip → (on failure) fix button.
+
+**WireGuard**
+| Check | Primitive | Fixer | Primitive |
+|---|---|---|---|
+| `wg` binary installed | shell `which wg` | Install | `apt install wireguard-tools` (new endpoint) |
+| Interface up | `GetInterfaceStatus()` | Bring up | `InterfaceUp()` (exists) |
+| IP forwarding on | `CheckSystem().IPForwarding` | Enable | `EnableIPForwarding()` (exists, orphaned) |
+| Masquerade rule present | `CheckSystem().Masquerading` | Add rule | `AddMasqueradeRule(vpnRange)` (exists, orphaned) |
+| WG-FORWARD chain set up | new check | Setup chain | `SetupForwardChain(...)` (exists, orphaned) |
+| Initial config exists | file stat | Create config | `handleCreateWGConfig` logic (removed in 807364b — re-add) |
+| systemd unit installed | file stat `/etc/systemd/system/...` | Install unit | `handleInstallService` logic (removed — re-add) |
+| Service enabled | `systemctl is-enabled` | Enable | `handleEnableService` logic (removed — re-add) |
+
+**HAProxy**
+| Check | Primitive | Fixer | Primitive |
+|---|---|---|---|
+| `haproxy` binary installed | shell `which haproxy` | Install | `apt install haproxy` |
+| Config exists | `GetStatus().ConfigExists` | Write config | `WriteConfig(httpPort, httpsPort, ssl)` (exists) |
+| Running | `GetStatus().Running` | Start | `Start()` (exists) |
+| Reload health | implicit via config valid + running | Reload | `Reload()` (exists, exposed) |
+| Logging configured | new check (parse cfg for `log` line) | Fix logging | `handleFixHAProxyLogging` logic (removed — re-add) |
+
+**dnsmasq**
+| Check | Primitive | Fixer | Primitive |
+|---|---|---|---|
+| `dnsmasq` binary installed | shell `which dnsmasq` | Install | `apt install dnsmasq` |
+| Config exists | file stat | Write config | `WriteConfig()` (exists, orphaned) |
+| systemd unit initialized | file stat | Init unit | `handleDNSMasqInit` logic (removed — re-add) |
+| Running | `Status()` | Start | `Start()` (exists, orphaned) |
+| Listening on LocalInterface | netstat/ss check | Reload after config | `Reload()` (exists, orphaned) |
+
+**Let's Encrypt**
+| Check | Primitive | Fixer | Primitive |
+|---|---|---|---|
+| acme.sh installed | `GetStatus().Configured` | Install | (new — wrap acme.sh installer script) |
+| Per-domain cert present | `GetDomainStatus(d).CertPath` | Request cert | `RequestCertForDomain(d)` (exists) |
+| Per-domain not expiring | `NeedsRenewal(d, days)` | Renew | `RequestCertForDomain(d)` (exists) |
+| SANs complete | `CheckCertSANs(d)` | Re-request | same |
+
+**System**
+| Check | Primitive | Fixer |
+|---|---|---|
+| Public IP detected | `cfg.PublicIP != ""` | Re-detect (trigger route53 sync) |
+| Horizon systemd unit installed | file stat | Install (generate unit file) |
+| Horizon service enabled | `systemctl is-enabled` | Enable |
+| apt packages up to date | (optional, defer) | — |
+
+**Package install — security note**: re-adding `handleInstallRequirement` means horizon runs `apt install` as root. Acceptable for a homelab admin tool but worth gating: admin-only, one-click confirmation, log every invocation with stdout/stderr into a persistent audit log visible in the UI.
+
+**API endpoints (new in this phase)**:
+```
+GET  /api/v1/system/health                 # aggregated per-component check results   ✅ done
+POST /api/v1/system/fix/ip-forwarding      # EnableIPForwarding                       ✅ done
+POST /api/v1/system/fix/masquerade         # AddMasqueradeRule                        ✅ done
+POST /api/v1/system/fix/wg-forward-chain   # SetupForwardChain                        ✅ done
+POST /api/v1/system/fix/wg-rules           # regen PostUp/PostDown + bounce iface     ✅ done
+# POST /api/v1/system/install/package — DELETED 2026-09-22 (privilege-classification.md §3.1 #8,
+#   §3.5). An HTTP request causing apt-get install on a live gateway can restart a daemon carrying
+#   traffic at a moment nobody chose. Replaced by: sudo homelab-horizon install-deps.
+GET  /api/v1/system/apt-audit              # JSONL audit log, newest-first             ✅ done (read-only; its writer was deleted 2026-09-22, so the file is a closed record)
+# /api/v1/system/install/acme dropped: lego is compiled into horizon, no external acme.sh binary to install.
+# Per-domain cert request: /api/v1/ssl/request-cert already exists (pre-Phase-0). ✅ pre-existing
+# POST /api/v1/system/install/horizon-unit — DELETED 2026-09-22 (privilege-classification.md §3.1 #6/#7).
+# POST /api/v1/system/enable/horizon        — DELETED 2026-09-22. A web process that can rewrite the
+#   unit saying who it runs as has a one-request path back to User=root. The System Health card keeps
+#   both checks and shows `sudo homelab-horizon install` / `sudo systemctl enable homelab-horizon`.
+POST /api/v1/wg/create-config              # handleCreateWGConfig                     ✅ done
+POST /api/v1/dnsmasq/write-config          # WriteConfig + SetMappings                ✅ done
+POST /api/v1/dnsmasq/reload                # Reload (writes config first)             ✅ done
+POST /api/v1/dnsmasq/start                 # Start (ensures unit via dnsmasq.Start)   ✅ done
+# /api/v1/dnsmasq/init-unit collapsed: Start() auto-ensures the systemd unit.
+POST /api/v1/haproxy/write-config          # WriteConfig (exists already)              ✅ pre-existing
+POST /api/v1/haproxy/fix-logging           # handleFixHAProxyLogging                   ✅ done
+```
+
+Single `POST /api/v1/system/fix/:id` with `id` switch is an alternative — less REST-pure but fewer routes. Either works; minor.
+
+**UI**: expanded `SystemTab`. Per-component card (WG, HAProxy, dnsmasq, LE, System), each card is a vertical check list with green/red chips + inline fix buttons. One collapse per card. Apt-install buttons behind a confirmation modal.   ✅ done (ui/src/components/SystemHealthTab.tsx)
+
+**Out of scope for Phase 0**: the iptables rule inventory (that's Phases 1–5). Phase 0 keeps using the existing primitives — it doesn't refactor them. Phases 1–5 layer the classifier on top later, and at that point the IPTables tab replaces the scattered iptables-fixer buttons in Phase 0's WG card.
+
+#### Phase 1 — Generator refactor (backend, pure code motion)   ✅ done
+
+**Goal**: centralize "what rules does horizon want" into one function, so we can diff live against expected.
+
+- New `internal/iptables/` package (or extend `internal/wireguard/`). I'd prefer a new package since this straddles WG + HAProxy concerns.
+- Types:
+  ```go
+  type Rule struct { Table, Chain string; Args []string }
+  func (r Rule) Canonical() string // stable "-A <chain> <args...>" string for set comparison
+  ```
+- `ExpectedRules(cfg *config.Config) []Rule` — emits the rule set horizon wants right now. Consolidates logic currently scattered across:
+  - `wireguard.AddMasqueradeRule` — POSTROUTING MASQUERADE for current default iface
+  - `wireguard.SetupForwardChain` — FORWARD jump rules + WG-FORWARD chain body (per-peer profiles)
+  - `wireguard.ExpectedPostUpWithChain` / `ExpectedPostDownWithChain` — informs PostUp regeneration
+- `StaleRules(cfg *config.Config) []Rule` — same generator with `iface=cfg.LastLocalIface`, `cidr=cfg.LastLanCIDR`. Empty fields → empty set.
+- Unit tests with table-driven rule expectations.
+
+**Does NOT change runtime behavior yet.** Existing callers keep calling existing functions. Compile-safety only.
+
+**Files touched**: `internal/iptables/rules.go` (new), `internal/iptables/rules_test.go` (new). Maybe export helpers from `internal/wireguard/` if needed.
+
+#### Phase 2 — Classifier + live read   ✅ done
+
+**Goal**: given `cfg` + live iptables state, produce `[]ClassifiedRule`.
+
+- Parse live state: `iptables-save -t nat` + `iptables-save -t filter`, extract relevant chains.
+- Compare each live rule against three sets: expected, stale, blessed (`cfg.BlessedIPTablesRules []string` of canonical forms).
+- Return slice of `ClassifiedRule { Rule; State string; Reason string }`. Reason explains *why* stale — e.g. "pinned to eth0 (last_local_iface), current default is eth1."
+- Config field: `BlessedIPTablesRules []string` (canonical signatures). **Local-only** — excluded from peer-sync so each host can bless its own adjacent tooling independently.
+- Unit-test the classifier against fixture iptables-save output.
+
+**Files touched**: `internal/iptables/classify.go` (new), `internal/iptables/classify_test.go` (new), `internal/config/config.go` (add `BlessedIPTablesRules`).
+
+#### Phase 3 — Reconciler (auto-heal), wired to startup + periodic   ✅ done
+
+**Goal**: on startup and periodically, call classifier → delete `stale` → add missing `expected` → update `LastLocalIface`/`LastLanCIDR`. Never touch `unknown` or `blessed`.
+
+- New `Reconcile(cfg)` in `internal/iptables/`. Returns a report (what it deleted, what it added, what it left alone).
+- Wire into `server.startHealthCheck` cadence (every 60s already) — classifier is cheap, no need for its own ticker. Remove `cfg.LocalInterfaceInterval` field (added in the ripped attempt, now dead).
+- Also run once at startup, right after service init, before the HTTP server goes live. Covers the "rebooted into drifted state" case.
+- **Auto-infer stale iface**: on reconcile entry, if `cfg.LastLocalIface == ""`, scan live `nat POSTROUTING` for a `-o <X> -j MASQUERADE` where `X != currentDefault`. Use that `X` as the stale identifier for this pass. Persist as `LastLocalIface` after successful cleanup. (No config flag; this is the always-on first-bootstrap behavior.)
+- After reconcile: `updateConfig` to persist `LastLocalIface = currentDefaultIface`, `LastLanCIDR = currentLanCIDR`, so next startup knows what "last good" was.
+- Also update wg0.conf PostUp/PostDown via existing `UpdateInterfaceRules` so a reboot comes up clean (use regex-match on MASQUERADE clause, not substring-swap, so empty old iface still works).
+- Also reload dnsmasq if `LocalInterface` IP drifted.
+
+**This is where the original ticker logic gets replaced — properly this time.**
+
+**Files touched**: `internal/iptables/reconcile.go` (new), `internal/server/server.go` (wire into health check, remove any stub).
+
+#### Phase 4 — API endpoints   ✅ done
+
+```
+GET    /api/v1/iptables/rules          # returns []ClassifiedRule + summary counts
+POST   /api/v1/iptables/bless          # body: { canonical: "..." } → appends to BlessedIPTablesRules
+POST   /api/v1/iptables/unbless        # body: { canonical: "..." } → removes
+# POST /api/v1/iptables/remove — DELETED 2026-09-22 (privilege-classification.md §3.3/§7.A).
+#   Took table/chain/args from the request body verbatim: an authenticated
+#   arbitrary-iptables-delete primitive. The UI shows the shell command instead.
+POST   /api/v1/iptables/reconcile      # triggers Reconcile immediately, returns report
+```
+
+Plus:
+```
+GET    /api/v1/system/health           # wraps wireguard.CheckSystem + haproxy.GetStatus + dnsmasq.Status
+                                       # returns [{component, installed, configured, running, errors[]}]
+```
+
+Fleet integration: existing `GET /api/v1/ha/status` response grows a per-peer `iptables_summary: {expected, stale, blessed, unknown}` field, fed by each peer's own classifier running locally.
+
+Admin-auth gate on all mutations. Read endpoints follow existing settings-read auth policy.
+
+**Files touched**: `internal/server/handlers_api_iptables.go` (new), `internal/server/handlers_api_system.go` (new), `internal/server/server.go` (route registration).
+
+#### Phase 5 — UI: System Health tab expansion + IPTables tab   ✅ done
+
+**System Health tab** (expand existing `SystemTab`):
+- Top section: per-component health cards — WireGuard, HAProxy, dnsmasq — each showing installed/configured/running chips + error list. Data from `GET /api/v1/system/health`.
+- Below that: existing config display (PublicIP, LocalInterface, etc.) — keep as-is.
+
+**IPTables tab** (new):
+- New `<Tab label="IPTables" />` in `ui/src/routes/settings.tsx:1354`.
+- Table: table/chain/rule/state/reason/actions columns.
+- Row actions:
+  - `unknown` → [Bless] [Remove]
+  - `blessed` → [Unbless]
+  - `stale` → [Remove now] (or let auto-heal handle)
+  - `expected` → no actions
+- Header: "Reconcile now" button → calls `POST /api/v1/iptables/reconcile`, shows report as toast.
+- Filter chips: show only Stale / Unknown / Blessed / Expected.
+
+**HA Fleet tab** (augment existing `HAFleetTab` at `ui/src/routes/settings.tsx:1016`):
+- Per-peer row adds a warning chip when that peer reports `unknown > 0 || stale > 0` (driven by `iptables_summary` in the fleet status payload).
+- Chip links to that peer's admin URL at the IPTables tab so ops can review/bless the remote peer's rules in that peer's own local context.
+
+**Files touched**: `ui/src/routes/settings.tsx` (add tab + component), `ui/src/api/hooks.ts` (new hooks), `ui/src/api/types.ts` (new types).
+
+### Out of scope
+
+- Full iptables table (we only inspect 3 chains horizon cares about — everything else is invisible, including output/prerouting).
+- ip6tables — IPv6 is not currently managed by horizon.
+- nftables — same, not used.
+- Bless-by-pattern (regex matching) — ship exact-signature bless first; add pattern support only if operators ask.
+
+### Ordering / ship plan
+
+| Phase | Dependency | Value at merge |
+|---|---|---|
+| 0 | — | **Health dashboard back.** Every lost fixer restored behind a button. Independent of the iptables work. |
+| 1 | — | Pure refactor, no runtime change. Foundation for 2+. |
+| 2 | 1 | Testable classifier. No UI yet. |
+| 3 | 2 | **Self-heal works.** Recovery from current outage + future drift. |
+| 4 | 3 | IPTables API. Useful for ops scripting. |
+| 5 | 4 | IPTables UI tab + fleet chips. Deprecates Phase 0's WG-iptables fixer buttons. |
+
+Phase 0 and Phase 1 are independent — they can land in parallel. Phase 3 is the "we're unstuck" milestone for the current outage. Phase 5 retroactively cleans up Phase 0's WG card by replacing scattered iptables fixes with the unified classifier.
+
+### Recovery for the currently-bad box
+
+Until Phase 3 ships, the manual procedure is:
+1. `sudo iptables -t nat -S POSTROUTING | grep MASQUERADE` → find stale iface name.
+2. `sudo iptables -t nat -D POSTROUTING -o <old-iface> -j MASQUERADE`
+3. `sudo iptables -t nat -I POSTROUTING 1 -o <new-iface> -j MASQUERADE`
+4. Edit `/etc/wireguard/wg0.conf`, replace old iface with new in PostUp/PostDown.
+5. `sudo wg-quick down wg0 && sudo wg-quick up wg0` (or equivalent reload).
+6. `sudo systemctl reload dnsmasq`
+
+Phase 3 replaces this with: restart horizon, done.
+
+### Known cleanups (not blocking)
+
+- ✅ **Collapsed** (`2b03ed0`). Was: `internal/wireguard` and `internal/iptables` both build the same rule set — one shells out immediately on change, the other generates for the reconcile diff. They must be edited in lockstep, which is what let the FORWARD-only jail persist. Collapse `wireguard.Rebuild{Forward,Input}Chain` onto `iptables.ExpectedRules` (touches ~4 call sites).
+
+### Decisions
+
+- **Bless scope** — **local (per-host)**. `BlessedIPTablesRules` stays out of the synced config; it's node-local state. Different peers can legitimately have different adjacent tooling (monitoring, host-specific VPN clients, etc.) and pinning bless to the whole fleet would force noise on peers that don't share the local context.
+- **Fleet visibility** — because bless is local, the fleet *does* need to know when peers have unknown rules. Each peer reports counts (`{expected, stale, blessed, unknown}`) in its fleet-status payload. HA Fleet tab surfaces a badge on any peer with `unknown > 0` or `stale > 0`, drill-down links to that peer's IPTables tab.
+- **Reconcile cadence** — **piggyback `startHealthCheck` (60s)**. Kill `LocalInterfaceInterval` config field (added in the ripped attempt) before Phase 3 — don't expose a knob we don't use.
+- **Stale-iface auto-infer** — **on by default**. When `LastLocalIface == ""` (first install / never reconciled), inspect live iptables for any `-o <X> -j MASQUERADE` where `X != currentDefault` and treat `X` as the stale iface. No flag — if an operator wants different behavior they can bless the rule or manually set `LastLocalIface`.
+
+### Implementation notes derived from decisions
+
+- `cfg.BlessedIPTablesRules` is already planned; since it's local-only, mark the field with a JSON tag that the peer-sync pull loop excludes — double-check how the sync loop selects fields (may need a dedicated "local-only" substruct or explicit exclude list).
+- Fleet status extension: `GET /api/v1/ha/status` (existing) should grow an `iptables_summary` per peer: `{expected, stale, blessed, unknown}`. Each peer's classifier runs locally and reports counts via the existing peer-sync push.
+- HA Fleet tab (`HAFleetTab` in `ui/src/routes/settings.tsx:1016`) adds a warning chip per peer row when `unknown > 0 || stale > 0`, linking to that peer's IPTables tab via its admin URL.
+- Auto-infer lives in Phase 3's reconciler: on entry, if `LastLocalIface == ""`, scan live rules → pick the non-current `-o X -j MASQUERADE` → set as stale identifier for this reconcile pass → persist as `LastLocalIface` after successful cleanup.
+
+## ✅ SSO settings card — deployed 2026-09-17
+
+Until this, the only way to configure SSO was hand-editing `config.json` on the
+server and restarting — for the feature whose failures are hardest to read.
+**Settings → Users → Single sign-on** now holds it.
+
+- `GET/PUT /api/v1/settings/oidc`. The **client secret is write-only**: the
+  response says `secretStored`, never the value, so a blank field on save means
+  keep it (`clearSecret` removes it).
+- The **redirect URI is reported, not accepted** — hz derives it from
+  `admin_url`, so letting anyone type it would let hz and the provider disagree
+  about a value hz owns. Read-only and copyable in the card.
+- `POST /api/v1/settings/oidc/discover` fetches the provider's discovery
+  document and reports what came back. A wrong issuer, a provider that is down
+  and an untrusted certificate otherwise fail identically and opaquely at
+  sign-in. Verified live: the real issuer returns its token endpoint, and
+  `…/nope` returns `404 Not Found` instead of silence.
+- The card warns, next to the toggle, that auto-provision plus a gate makes
+  every admitted account an administrator — hz has one role.
+- README gained a **Providers** section: OIDC only, Zitadel recommended with
+  its two gotchas (Login v2 needs path routing; the API needs `proto h2`), and
+  a plain statement that GitHub cannot work without new code.
+
+
+## ✅ OIDC: domain gating + docs — deployed 2026-09-17
+
+**Driver:** the same project wants people to sign in with Google Workspace and
+nobody to manage passwords. hz already speaks OIDC
+(`internal/config/config.go:1785`, `internal/server/handlers_oidc.go`), but two
+things are missing for this to be safe with Google.
+
+1. **Gating is group-claim only today.** `AllowedGroups` / `AdminGroups`
+   (`handlers_oidc.go`, checked before `resolveOIDCUser`) match a groups claim.
+   **Google Workspace does not send group claims by default**, so today the
+   only workable setting would be no gating at all. Needs a domain gate:
+   accept the `hd` claim (Workspace's own domain claim), or a required-claim
+   pair plus an email-domain allowlist, and require `email_verified`. Generic
+   `RequiredClaims map[string][]string` covers Microsoft tenants too.
+   For comparison, Gitea does this with `RequiredClaimName`/`RequiredClaimValue`
+   per auth source, plus `EMAIL_DOMAIN_ALLOWLIST`.
+2. **Auto-provisioning makes admins.** `role := db.RoleAdmin` is hardcoded
+   (`handlers_oidc.go:187`) because admin is the only role
+   (`internal/db/users.go:29`; the viewer role was dropped, see
+   [icebox.md](icebox.md) "Read-only access"). So `AutoProvision` + a domain
+   gate = **everyone in the Workspace domain becomes an hz admin**. That is the
+   decision below, and it is the reason this slice is not just a claim check.
+3. **No documentation.** README has no SSO section at all. Write one: creating
+   the OAuth client in Google Cloud, the redirect URI hz expects
+   (`OIDCRedirectURI()`, needs an https `admin_url`), the config keys, how the
+   gate is configured, and what happens on first login. The sibling
+   instructions for Gitea live in the intern repo, not here.
+
+**Done 2026-09-17.** `allowed_email_domains` (refuses an unverified email
+outright) and `required_claims` (any value, every claim), both gating before
+the group checks so a refusal names the real reason instead of blaming a groups
+claim that will never arrive. Tests: `internal/server/oidc_gate_test.go`,
+including the subdomain and lookalike-suffix cases and a consumer Google
+account with no `hd`. README gained a "Single sign-on (OIDC)" section.
+
+**Live on the gateway:** issuer `https://id.<our-domain>`, its client id,
+`allowed_email_domains: ["<our-domain>"]`, `auto_provision: false`. `/api/v1/auth/oidc/status` reports enabled and
+`/start` redirects to Zitadel with PKCE. An hz account `<admin>@<our-domain>`
+exists for the identity to attach to.
+
+**The decision, made:** auto-provision stays **off**. hz has one role — admin —
+so a domain gate plus auto-provision would make every Workspace account an
+administrator of the gateway. Accounts are created deliberately; SSO attaches
+to them.
+
+**Note for the next person:** the Google `hd` claim does NOT reach hz. Zitadel
+consumes it when it federates Google and issues its own token, so hz's gate is
+the verified email domain. Requiring `hd` here would refuse everyone.
+
+**PROVEN 2026-09-17.** A Workspace account signed in from a LAN machine, and
+hz logged the shape that matters:
+
+    login user=<user> factor=oidc subject=<idp subject> role=admin
+
+Google Workspace → Zitadel → hz, attached to the pre-created account, with
+auto-provision off. The local `nthalk` account and the admin token still work,
+which is the point: hz is the edge, and the outage that takes the IdP down is
+when an operator most needs in.
+- **risks:**
+  - An email-domain check alone is forgeable: a consumer Google account can
+    carry a company address, and multi-tenant Microsoft logins have allowed
+    unverified email attributes. The `hd` claim (or a tenant-pinned issuer) is
+    the real gate.
+  - Locking yourself out: hz is the edge, and the IdP is usually reached
+    through it. Local accounts and the admin token must keep working, which is
+    what `oidc.go`'s own comment already promises.
+- **blocking decisions:** with a domain gate, is auto-provisioning acceptable
+  (every Workspace user becomes an hz admin), or does auto-provision stay off
+  so an admin creates the account first? A third option is reviving a
+  non-admin role, which is the iceboxed item and much larger.
+
+
+## ✅ Phase 0 leftovers (`aae461c`)
+
+Both closed, and one of them was never open:
+
+- **dnsmasq answering on `local_interface`** — half real. `CheckLocalBind`
+  already proved the config coherent; nothing proved anything replied. Added a
+  CHAOS-record liveness probe, surfaced as its own row beside the config row.
+- **Public IP re-detect** — **already built.** `startRoute53Sync` re-detects
+  every 5 minutes and republishes the Route53 records on change; prod confirms
+  it running with `public_ip_interval: 300`. My plan entry was wrong, not the
+  code. Worth remembering next time this file asserts something is missing.
+
+
+## ✅ Canon writeback to `~/doc` (`902c1fc` in that repo, committed not pushed)
+
+`AUTH-4` moved from a proposal blockquote in `patterns/webauthn.md` into
+`patterns/standards.md`, gaining three clauses the proposal lacked: the ceremony
+store must be readable by every instance that can serve `finish`, RPID comes
+from a configured origin and never the request host, and **one relying party per
+origin**.
+
+hz is documented as the third implementation for the two shapes the others do
+not have — two relying parties in one service, and a ceremony with no username
+because the WireGuard source IP identifies the caller first. Also wrote down the
+state that is *not* the ceremony store, since conflating the pending-login and
+the WebAuthn challenge is an easy mistake and an unpleasant one to find.
+
+Fixed `DATA-1`: the ashid module path is capitalised, and the lowercase form in
+that doc fails `go get`. Noted that ashid's time-sortability is the right
+tiebreaker against a second-granularity timestamp — which is what bit the
+password history here.
+
+
+## ✅ Org alignment backlog — all ten, this repo owns it
+
+Recovered from `~/doc` (`0f02917^:plan/homelab-horizon.md`) on 2026-08-15 and
+finished 2026-08-17. Score at capture: ✅14 · ⚠️4 · ❌11.
+
+- ✅ **CLI-1** (`0f602b9`) cobra, with the old single-dash flags translated at
+  the edge so a printed recovery step keeps working.
+- ↩️ **WEB-5 / DEPLOY-5 + DEPLOY-9** — **reversed 2026-08-18**, see
+  [done.md](done.md#web-5-reversed-the-ui-is-compiled-in-again-2026-08-18). Was:
+  UI served from disk, `payload:` target,
+  release archives carry `public/`, deploy installs both halves atomically and
+  root-owned. A missing UI explains itself rather than 404ing the login page.
+- ✅ **WEB-1** — MUI v9 and pnpm. pnpm immediately caught a phantom
+  `@mui/system` dependency that npm had been hoisting.
+- ✅ **WEB-2, WEB-3, WEB-8, WEB-9** (`8198c69`) — two were real bugs rather than
+  paperwork: an alias tsc resolved and the bundler did not, and a dev server
+  bound to every interface.
+- ✅ **CFG-2 / CFG-4** — nothing to do, and the reason is written down rather
+  than a placeholder added for a pattern hz is exempt from.
+- ✅ **EDGE-4** — coarse edge rate limiting, proven against real HAProxy. The
+  MFA portal is exempt: these rules run before the jail rules, so limiting it
+  would lock a jailed peer out of un-jailing themselves.
+
+
+## ✅ Narrow reload, and the history shape
+
+Two things, one of which turned out to be a real defect rather than a
+nice-to-have.
+
+**Narrow reload.** `ReloadRemotes(cfg)` diffs the configured vantages and
+restarts only the ones whose settings actually changed. An untouched vantage
+keeps polling on the same watermark; local checks keep their history. The
+blunt `Reload` remains for a whole-config change. `Monitor.config` became an
+`atomic.Pointer` so the narrow reload can swap it without stopping the local
+check goroutines first — which also closed a latent race the old `Reload` had,
+between cancelling the context and the goroutines actually returning.
+
+**The history chart was quadratic in fleet size.** Not "the dots are
+expensive" — the x-axis was the *union of every check's timestamps*, and every
+check got a cell in every column, with each latency cell wrapped in its own
+MUI `<Tooltip>`. Measured before touching it:
+
+| checks | payload / 30s | SVG nodes |
+|---|---|---|
+| 8 | 62 KB | 12,800 |
+| 32 | 249 KB | 204,800 |
+| 64 | 498 KB | 819,200 |
+
+Two vantages over five domains lands around 32. The fix is in two halves:
+
+- **Server** (`internal/monitor/history.go`): time is bucketed to a fixed
+  column count and consecutive same-status buckets collapse into runs. A check
+  that was up the whole window is one run, whatever the sample count. A bucket
+  takes the *worst* status and the *slowest* latency in it — a mean would hide
+  the spike, and an outage that fits inside one column must not be averaged
+  out of existence. Status forward-fills across a check's intervals so the
+  ribbon is continuous; latency deliberately does not, because a repeated
+  number is a measurement nobody took.
+- **UI** (`ui/src/components/ChecksHistory.tsx`, replacing
+  `ChecksStackedCharts.tsx`): rows group by vantage, each group gets one strip
+  of its worst status, only checks that changed state get their own row, and
+  steady rows collapse behind a count. Native `<title>` instead of a React
+  tooltip per element. Latency is a log-scale line per group with decade
+  gridlines — the stacked-area version summed latency across unrelated
+  services, which was never a physical quantity, and mixing a 2 ms local ping
+  with a 300 ms transatlantic request on a linear axis flattened everything
+  worth reading.
+
+Measured after, on a 25-check / 3-vantage fixture rendered in a browser:
+**28 SVG nodes, 127 DOM nodes, 17 KB**. Against roughly 125,000 SVG nodes for
+the same data before.
+
+Verified by building the component standalone against a fixture generated by
+the real Go encoder (`HZ_FIXTURE=<path> go test ./internal/monitor/ -run
+TestDumpFixture`) and looking at it in a browser — the grouping, the collapse
+toggle, the log axis and the time axis all read correctly. That fixture dumper
+is kept, skipped by default, because the next change to this component wants
+the same check.
+
+- **risk**: the display was verified against a fixture, not against a running
+  hz. hz will not start unprivileged on this box — it blocks bringing up the
+  WireGuard interface — so the page has never been seen with live data.
+
+
+## ✅ Vantage install helper (curl|bash + TOFU pinning)
+
+The panel told you to run `hz-probe install` and gave you no way to get the
+binary onto the box. hz already had the machinery for its own CLI — a
+curl|bash installer with the instance URL baked in, binaries embedded under
+`-tags hzembed`, a copy-paste one-liner in the UI — so this mirrors it.
+
+- `hzbin` now serves two tools. `hz-` is a prefix of `hz-probe-`, so
+  `Available` had to learn the difference or an operator installing the CLI
+  would be handed the agent. Guarded by a test that runs only under the tag.
+- `/admin/hz-probe/install` renders per request with both this instance's base
+  URL *and the caller's own address* (via `getClientIP`, so it survives the
+  HAProxy hop) — which lets the script print the exact URL to paste back.
+- `POST /api/v1/checks/remotes/token` mints the token. hz generating it is what
+  removes the copy-back step: by the time the agent runs, hz already holds the
+  credential it will present. Nothing is stored until the vantage is saved, so
+  an abandoned dialog leaves no credential behind.
+
+**Trust on first use, with the "first use" part visible.** The agent's
+certificate is self-signed, so nothing vouches for it. `probe.Client.Observe`
+accepts the handshake to *report* the fingerprint, and records separately
+whether it would have verified. The test endpoint sets it; the poll loop never
+does — TOFU that happens silently in the background is not TOFU, it is no
+verification at all. `Observe` together with `PinSHA256` is a hard error
+rather than a precedence rule, because both install a `VerifyPeerCertificate`
+and the second would win silently.
+
+The flow is now: click Add → copy one line → run it on the VPS → paste the URL
+it prints → Test connection → **Pin it** → Add.
+
+**Direction note.** The installer is the one time anything talks *to* hz. It
+is a bootstrap an operator is sitting in front of, not the steady state: what
+it installs holds no address for hz, and the agent it starts never dials
+anything. Worth keeping straight, since the rest of this design exists to
+avoid exactly that dependency.
+
+Verified by building the panel standalone against a stubbed API and driving it
+in a browser: the three vantage states, the install command with the minted
+token, the green test result and the amber pin prompt with its fingerprint all
+render correctly. `-tags hzembed` build and tests pass, and the two-tool split
+was checked against real cross-compiled binaries.
+
+**✅ The installer has now been run** (2026-09-10), end to end in a throwaway
+Debian container against the real rendered script and the real cross-compiled
+binary, with `systemctl`/`systemd-analyze` stubbed because containers have no
+systemd. Verified: arch detection and download, `/etc/hz-probe` at `0700`,
+`token` and `key.pem` at `0600`, a certificate generated for the address hz
+saw the request come from, the systemd calls in the right order, a unit whose
+ExecStart uses the `%d` credential paths, and then the agent actually serving
+over that certificate — open `healthz`, authenticated poll, `401` on a wrong
+token, `want_targets: true` for a fresh agent.
+
+It found one real defect, fixed in `9401d4e`: `--vantage` defaulted to the
+host's own hostname, so a cloud instance would name itself
+`instance-20260911-1234` while hz called it `vps-nyc`, tripping the
+name-mismatch warning on every fresh install. The dialog now asks for the name
+first and puts `HZ_PROBE_NAME` in the command.
+
+- **risk**: still untested under real systemd. `DynamicUser` +
+  `LoadCredential` + `SystemCallFilter` is the part a stub cannot exercise,
+  and it is the part most likely to need adjustment on first boot.
+- **risk**: no vantage has run on a real outside host, so the Checks page has
+  never been seen with live data.
+- **host note**: Oracle's Always Free tier stops instances under 5% CPU for
+  24h as of 2026, which is exactly what this agent looks like — prefer GCP
+  e2-micro, and set `poll`/`probe` to 300 there, because its 1 GB/month egress
+  cap is reachable at the 60s default once there are a dozen domains.
+
+
+## ✅ Push mode, and it is the default now (2026-09-10)
+
+Deploying the first real vantage found the flaw in pull. A GCP e2-micro has
+no inbound address unless you pay for one, its ephemeral IP changes on every
+stop, and each change invalidates the certificate and the pin. Three separate
+failures in one evening — no external IP, a terminated instance, a stale
+address — all of them consequences of requiring the agent to accept inbound.
+
+**The premise behind pull did not survive inspection.** Pull was chosen so hz
+would hold no outbound dependency: "the remote should be accessible, hz might
+not be." Sound, except the feature cannot escape that dependency anyway — if
+hz is unreachable the agent has nothing to report to, whichever way the
+connection runs. What actually preserves that case is the buffer, which is
+direction-agnostic: the agent keeps probing and flushes the backlog when hz
+answers again.
+
+And hz already accepts inbound. That is the premise of the whole feature —
+these checks exist to verify hz's public edge works. An authenticated POST to
+that same edge adds no exposure.
+
+What push retires, every one of which bit us during the deploy:
+
+| | pull | push |
+|---|---|---|
+| agent address changes | cert regen + re-pin + URL edit | irrelevant |
+| inbound firewall rule | required, plus an instance tag | none |
+| static IP | wanted, billable | not needed |
+| certificate | self-signed, TOFU, pinned | hz's ordinary CA cert |
+| behind NAT | impossible | fine |
+
+**The agent registers itself.** Its first report carries the install grant,
+and hz turns that into a config entry named by the agent — so there is
+nothing to paste back at all. The token is the identity; the name in the body
+is only a label, and results are filed under the token's vantage so a
+misnamed agent cannot report as another. A name collision is refused rather
+than merged, because two agents in one set of check rows interleave into
+nonsense.
+
+**A watchdog replaces reachability testing.** With no poll loop nothing would
+notice an agent going quiet, so `sweepPushVantages` marks one failed after
+three missed intervals — and keeps "never reported" distinct from "stopped
+reporting", because a fresh install is not a fault. Self-registered vantages
+default to 300s, matching the free-tier egress advice rather than the 60s
+that gets close to a 1 GB cap.
+
+Pull is kept behind `HZ_PROBE_PULL=1` for anyone who wants hz to hold no
+outbound dependency, with its costs stated at the point of choice in the UI.
+
+**Verified end to end**, not just unit-tested: hz's real routes on a real
+port, the real installer in a container, the real agent reporting. Install →
+self-register → target handshake → live results (`ext:GCP:https:example.com
+= ok`, and `dns = failed` because the fixture expects a different IP, which
+is the check working) inside 30 seconds.
+
+Two defects the live run caught:
+- `ReloadRemotes` treated "config unchanged" as "already running", so a
+  reload before `Start` left every vantage silently unpolled.
+- The agent waited a full interval after being handed its first target set,
+  so a new vantage showed an agent row and no data for minutes. It now
+  reports 10s after new targets arrive.
+
+
+## ✅ First light: a vantage is running, and it found four things (2026-09-11)
+
+`gcp-usw1` — a GCP e2-micro in us-west1, push mode, self-registered. The
+hardened systemd unit works on real systemd (`Service hz-probe is active`),
+which was the last unverified thing in the feature.
+
+**39 rows, 33 ok, 6 failed, and every failure is real:**
+
+| finding | evidence |
+|---|---|
+| `bringit.<our-domain>` public DNS is stale | resolves `<stale-public-ip>`, hz expects `<our-public-ip>`; HTTPS to it then times out |
+| `vay.<our-domain>` public DNS is stale | resolves `<stale-public-ip-2>`, same shape |
+| `beta.<second-domain>` down from outside | HTTP 503 |
+| `mckinnon.<our-domain>` down from outside | HTTP 503 |
+
+Two records pointing at old public IPs and two services where the edge is up
+and the backend is not. None of it visible from inside, which is the point.
+
+**Four defects the deploy found, all fixed:**
+
+- **Internal-only services were being probed.** 42 of the first 75 rows were
+  red for names never published publicly. Target derivation now skips
+  `internal_only`. A monitoring page that is mostly false alarms is one people
+  stop reading.
+- **Rows outlived their targets.** Narrowing the set from 37 to 19 left the
+  check list at 75 — 56 rows nothing would update again, all red, all reading
+  as current. Same defect removing a vantage already handled, missed one level
+  down.
+- **The first report was timed by guesswork.** A fixed 10s delay after
+  receiving targets assumed a probe round finishes faster than that; with 37
+  targets it does not, so the results missed the report and sat unsent for a
+  full interval. A round now signals when it has results.
+- **Re-running the installer bricked the agent.** The script overwrote
+  `/etc/hz-probe/token` with the fresh grant used for the download, orphaning
+  the agent from its registered vantage — while printing "Using the existing
+  token", because that message comes from `hz-probe install`, which runs
+  after the shell already replaced the file. Every later report failed as a
+  name collision, pointing at the name and saying nothing about the credential
+  that moved. An existing token is now kept, with
+  `HZ_PROBE_REPLACE_TOKEN=1` for the case where hz genuinely no longer
+  recognises the agent.
+
+**Known sharp edge:** install grants are in memory and last an hour, so an hz
+restart invalidates any that have not been redeemed. An agent that has not yet
+reported is then stranded holding a token hz has never heard of. The refusal
+now names the escape hatch rather than repeating "unknown token" forever.
+
+- **next**: the two stale DNS records and the two 503s are yours. Also worth
+  a second vantage on a different continent, now that standing one up is one
+  command and needs nothing inbound.
+
+
+## `hz import` — the signals, and the plan file (2026-09-20)
+
+> Moved here from plan.md 2026-09-24. Import shipped; this is the record of
+> which signals were measured and why the proposal is a starting point.
+
+### `hz import` — what it will and will not infer
+
+The rule is **a wrong project assignment is worse than none**: a service on the
+wrong rung resolves the wrong config later and nothing looks wrong at the time.
+So there is no confidence score and no ranking — every proposed row carries the
+evidence it came from, printed beside it, and a service with no evidence is
+proposed as *unassigned*, which `ValidateProjects` already permits.
+
+Four signals were measured against real config shapes. Two are used:
+
+- **domain suffix** — the suffix one label below the one *every* domain shares.
+  A group needs **two** services: a suffix only one service sits under is that
+  service's own hostname. This is the signal that does nearly all the work, and
+  it produces nothing at all on the common single-domain gateway (one company
+  domain, a subdomain per service) — correctly, because there is no tree in
+  that config to find.
+- **identical backend** (`host:port`, byte-for-byte) — the same listening
+  process under two names (`git`/`registry` in example-projection.md §4). It
+  can only *join* a project the suffix already named; a backend address has no
+  project name in it. A cluster straddling two projects unassigns all of it.
+- **posture word** (`dev`/`test`/`stage`/`staging`/`beta`/`prod`) names an
+  ENVIRONMENT, never a project, and is matched as a whole token — `reproduction`
+  contains `prod` and means nothing of the kind. Unusable on a service with no
+  project, because a rung belongs to one.
+
+Two are reported as examined and rejected, with this config's numbers, because
+silence about a signal reads the same as not having looked:
+
+- **backend host** (port ignored) — a host is a machine and one machine hosts
+  several projects (`gw-1`). Co-location is not evidence.
+- **`internal_only`** — exposure is neither a project nor a posture; an
+  internal-only admin tool is production.
+
+`target_host`/`target_port` from the pre-projects JSON are **not fields on
+`config.Service` any more** — they are dropped on load, so nothing can key off
+them. The proxy backend is the surviving analogue.
+
+**Ordering.** Declarations and assignments go in one `Save`, and the order
+*within* the struct does not matter: the validators run over the finished
+config. `TestImportOrderWithinTheSaveDoesNotMatter` pins that from the side
+`legacy_compat_test.go` does not.
+
+### The plan file — the proposal is a starting point, not a verdict
+
+A dry run against a real **33-service** estate returned *33 assigned, 0
+unassigned, 2 projects* and was wrong. That estate is **flat** — every service
+sits at `<name>.<our-co>.<tld>` — so the domain suffix cannot tell one
+application from another and thirty services collapsed into one project. The
+environment grouping inherited the coarseness: one `dev` rung carrying three
+unrelated applications. Config promotion flows along an environment, so
+executing that would have been *actively wrong*, not merely coarse. (What the
+heuristic got right: the separate apex domain, and every posture word.)
+
+The fix is not a better heuristic. **The operator knows the structure; the
+config does not contain it.** So:
+
+```
+hz import --plan-out tree.json      # the proposal, as an editable file
+$EDITOR tree.json
+hz import --from tree.json          # dry run — validated, nothing written
+hz import --from tree.json --execute
+```
+
+Same pipeline: `ImportFile` → `ImportPlan` → `ApplyImport`. Only the *source*
+of the plan changes (`internal/config/import_file.go`).
+
+**What the file carries: the decisions, nothing else.** `projects`,
+`environments` (each owned by exactly one project), `assign` (service →
+project[/rung]), `unassigned` (plain list of names). It deliberately omits the
+**evidence strings**, the **signals** section and the **fingerprint** — evidence
+is hz's account of how *it* reached a row, and the moment the operator moves
+that row it is a lie sitting beside it. A regenerated `_readme` block carries
+the editing rules into the file; it is ignored on read.
+
+**Every service must appear exactly once**, in `assign` or in `unassigned`. An
+omission and a deliberate "leave this one alone" are otherwise the same file. It
+pays for itself twice: it is also the **drift guard** — a service added to or
+removed from the gateway since `--plan-out` is refused *by name*, which is
+strictly better than the fingerprint mismatch the proposal path reports.
+
+**The `iodesystems/dev` failure is inexpressible.** A rung is
+`{project, name, posture}` and a service's `environment` resolves against *its
+own* project, so an environment owned by one project and stood on by services in
+several is refused, listing every project, the services each contributed, and
+which of them declares no such rung
+(`ImportFile.validateRungOwnership`). Validated on both sides: the CLI holds the
+raw bytes so it names the **line** (`tree.json:12:`); the server re-validates
+because the API is a surface of its own.
+
+**Deploy gate, found while building Environments.** `Save()` now refuses a
+config where a service names both a project *and* an environment that is not
+declared. No deployed hz writes those fields yet, so no live config can hit it
+today — but check before the first deploy, and declare the `Environment`
+records before assigning services to them:
+
+```
+jq '.services[] | select(.project != null and .environment != null)' <config.json>
+```
+
+The order of operations is **declare the environment, then assign the service**,
+not the reverse.
+
+## Decision: remote access uses host routes, not a renumber (2026-09-10)
+
+The office LAN and a remote network were both `192.168.1.0/24`, so a
+`lan-access` peer got two routes for one prefix and its own won — the office
+unreachable, while hz's DNS kept resolving names to addresses on the remote
+side of the collision. Names worked, connections landed on whatever device
+held that address there.
+
+**Resolved by host-routing the specific office hosts** in the peer config,
+which wins on longest-prefix match over the client's own `/24`:
+
+```ini
+AllowedIPs = 10.100.0.0/24, <gateway-lan-ip>/32, <desktop-lan-ip>/32, <laptop-lan-ip>/32
+```
+
+**Carl, 2026-09-10: this is fine, not a stopgap.** hz's DNS works and the
+local network is shadowed at those addresses deliberately.
+
+What it costs, recorded so nobody "fixes" it later without knowing: any local
+device at a shadowed address is unreachable while the tunnel is up, and every
+host you want needs its own `/32`. `vpn-only` is not an alternative here —
+this deployment's internal DNS answers with real LAN hosts rather than the WG
+gateway, so routing only the VPN range reaches nothing.
+
+Two durable alternatives, both deferred rather than rejected:
+
+- **Renumber the office off `192.168.1.0/24`.** The only fix that scales to
+  every remote network, since that range is every consumer router's default.
+  Not doable remotely, and touches hz's address, `local_interface`, service
+  backends, DHCP reservations and `LastLanCIDR`.
+- **HAProxy `mode tcp` frontends on the VPN address** (see
+  [icebox](icebox.md)). Would collapse raw-IP LAN access into the gateway the
+  way HTTP services already are, removing the need for host routes *and* for
+  renumbering, with no NAT and no third DNS view.
+
+NETMAP was considered and dropped: it needs a VPN-specific DNS view on top of
+the two hz has, because `LocalDNSRecords` is one shared answer set for LAN and
+VPN both. Generating NAT rules under a DNS layer that keeps answering with
+unmapped addresses is drift you cannot see.
+
+---
+
+# Deleted designs — what was rescued before they went (2026-09-24)
+
+Four design documents were deleted because **the code carries them**: each was
+built, tested, and its reasoning now lives in Go doc comments and tests that
+cannot drift from the thing they describe. What follows is the part of each that
+the code did NOT carry. The files are in git history under their old paths.
+
+## `project-coordinate.md` — the config address became `<project>/<environment>/<app>/<role>`
+
+Implemented 2026-09-22, migration `0013`. The address type, the four-field AAD
+and the refusal are `configmgr/crypto.go:400-402`, the `0013` migration's
+`UNIQUE`/`PRIMARY KEY` on `(project, environment, app, role)`, and
+`configmgr/project_binding_test.go:38 TestCrossProjectReadIsRefused`. Four
+things the code cannot say:
+
+**The positive control, measured against the OLD binding before any code
+changed** — so the refusal is a change and not a tautology:
+
+```
+CONTROL: cross-project read SUCCEEDED, plaintext "acme's production password"
+CONTROL: cross-project unwrap SUCCEEDED, key id 2d65328724b33f88
+```
+
+**The freeze check.** Measured on the office gateway before the flag day:
+schema version 10, and `cm_machines`, `cm_registrations`, `cm_configs`,
+`cm_config_values`, `cm_current_keys` **all zero rows**. So `0013` destroyed no
+capability grant that ever existed — the claim is closed, not merely likely.
+
+**The generalisable lesson, which is the reason to keep any of this.** Three of
+the four places the design was wrong were the same shape: *a place where an
+address was assembled field by field rather than passed as a value, so adding a
+field to the struct left the assembly site silently short.* Nothing in the type
+system catches it — every field is a `string` and the zero value is legal — and
+three of the four were found by TESTS rather than by reading the inventory.
+**An audit that greps for the TYPE name finds them; one that greps for the field
+names does not.** The worst of them was `cmApprove`: it would have wrapped the
+environment key to a three-part address, hz would have relayed it, and the box
+would have refused to unwrap at boot with an authentication failure naming
+nothing — the whole typed-fingerprint ceremony spent on a blob that opens for
+nobody.
+
+**Three cheaper alternatives, rejected — recorded so they are not re-proposed:**
+
+- **(A) Keep three fields; require globally-unique environment names.** Costs the
+  estate its own naming (six `prod` rungs become `storefront-prod`, … — the
+  project coordinate spelled as a prefix inside one field, with no delimiter
+  anything can parse); contradicts the declared invariant that *every project
+  gets to have a prod*; and **does not fix the AAD, which is the actual defect** —
+  convention is not a binding.
+- **(B) Derive the project server-side; never put it on the wire.** Fatal:
+  **a field hz derived cannot be bound.** Binding only means something for fields
+  the opener knows INDEPENDENTLY of the party serving the blob (`configmgr/doc.go:176`).
+  A server-derived project is exactly `seq` — bind it and you have authenticated
+  hz's own opinion; don't and the substitution stays open. It also converts a
+  legible refusal into a silent stamp of the wrong project.
+- **(C) Do nothing.** Works on today's estate and fails only when a second
+  project reuses an app name — and the failure is a *gap*, not a wrong answer.
+  **The case for acting was never that it was broken**: the price was zero and
+  rises monotonically, and the next two steps on the path (key custody, redline
+  importing `configmgr`) are what turn a 200-line refactor into a coordinated
+  secrets migration.
+
+**Compatibility, decided:** an enrolled box sending a three-part address is
+**rejected with a 400 naming the missing field** — not accepted as project-less
+(that re-creates the defect and forecloses the PRIMARY KEY), not "refuse to
+start" (wrong blast radius: hz must not die because one box is old). A rejected
+box does not go down, it goes loud — `configmgr.Client` falls back to
+last-known-good cache. **No protocol version field**: the presence of `project`
+is a sufficient discriminator, and a version field would be a second source of
+truth about the same fact.
+
+## `dns-records.md` — the record manager
+
+All phases shipped (`internal/server/handlers_dns_records.go`, `classifyDrift`,
+`Config.LastPublishedRecords`/`DNSDriftBlocked`, the Records section on
+`domains.tsx`). Two rules and one open gap the code does not state:
+
+- **A DNS publish is SET-BASED, never single-shot.** Records are keyed by
+  `(name, type)`, and TXT at one name is a *set* — google-verify, SPF and DKIM
+  coexist. libdns `SetRecords` replaces the entire `(name,type)` RRset
+  (`libdns.go:161,185`) and `DeleteRecord` sends empty Data, which **matches ANY
+  value** (`libdns.go:205-210`). So a naive per-record add or delete wipes its
+  siblings. Always publish the whole set.
+- **Drift-halt scope is ALL DNS sync** (decided, option B), including service
+  A/AAAA. Consequence accepted at the time: an out-of-band edit to ANY managed
+  record halts the whole sync, automated failover included — which is why the
+  alert is loud and clearing drift is a one-click *accept live → adopt*.
+- ⚠ **Never verified end to end** — no live provider credentials and no fleet in
+  that environment. Needs a real drift round-trip and a two-peer HA test before
+  it is trusted on HA. Watch the first-run branch of `classifyDrift`: the first
+  publish seeds `LastPublished`, so a public-IP change reads as `driftPublish`,
+  not `driftDrift`. Filed as a resume condition in [icebox.md](icebox.md).
+
+## `prometheus-topology.md` + `metrics-writepath.md` — the scrape model
+
+Both shipped through `aa1445c` (exporter model with `mode: port|service|static`,
+scrape-token auth, multi-path probing, the served `setup.sh` + refresh timer,
+`ScrapeExclusions`, the Observability UI). Three things worth keeping:
+
+- **Host aliases were tried and reverted.** A machine reachable at both a VPN and
+  a LAN address was scraped twice. `HostDecl.Aliases` + canonical folding landed
+  (`31e7c57`) and was reverted (`a1e586b`) — identity-linking was more machinery
+  than the problem needed. What shipped instead is `Config.ScrapeExclusions`
+  (IPs/CIDRs never emitted as targets, still listed so the UI can un-exclude).
+- **`looksLikeExposition` had a false positive worth remembering.** It returned
+  true on the *first* matching sample line, so a catchall or status page carrying
+  one `word 123` line passed as a metrics endpoint. Now EVERY non-comment,
+  non-blank line must be a valid sample and the value uses a strict float grammar.
+- ⚠ **Operator action still owed** and carried forward to [plan.md](plan.md):
+  the Prometheus box was never re-wired to the token-gated endpoints. The old
+  unauthenticated `prometheus.yml` refresh script now 401s. Fix is
+  `GET /integration/prometheus/setup.sh` as admin → `sudo bash`.
+
+---
+
+# Landed on `dev`, not deployed — the record (moved from plan.md 2026-09-24)
+
+These were the long status cells of plan.md's active-work table. They are
+**completed work** and the house rule sends completed work here, but they are
+kept VERBATIM rather than summarised: each carries measured findings, the
+reasoning behind a hard call, and `file:line` evidence that exists nowhere
+else. plan.md's table now carries a one-line row and a link to each.
+
+⚠ Everything below is on **`dev`**. None of it has been deployed.
+
+## Item 11 — Projects · Environments · machine removal
+
+✅ on **`dev`**, not on main, nothing deployed
+
+## Item 12 — The observed-state channel — the agent reports back
+
+✅ store + serve on **`dev`**; ✅ the drift SCREEN at `/drift` ([ui.md](design/ui.md) Part 2) — one screen in the existing shell, NOT the nav redesign
+
+## Item 13 — Agent handover steps 1–3 — credential, WireGuard, certs + error pages
+
+✅ on **`dev`**, and the agent is still **INERT**; ◻ steps 4–5 (arm the unit, then de-root hz). Blocker 1 of [§8.3](design/privilege-audit.md) — the no-default-route stand-down, which would have had an armed agent reconcile the gateway's port forwards away — is ✅ done (`iptablesSectionFor`); blockers 2–7 are open
+
+## Item 14 — The project coordinate
+
+✅ **done** 2026-09-22. Flag day for every sealed value and every wrap; the freeze check found none to lose (gateway `hz.db` at schema 10, every `cm_*` table zero rows). Migration `0013`; the backwards resolution and `projection.ResolveEnvironment` are deleted; `configmgr.TestCrossProjectReadIsRefused` is the standing proof
+
+## Item 15 — Segment records — what a `Machine.Segments` name resolves to
+
+◐ **the record landed 2026-09-23** on **`dev`** (`feat/segment-records`): `config.Segment{Name, Project, CIDR, Interface, Members}` + `hz segment ls\|show\|add\|rm`, validated FIFTH on `Save()` (Projects, Environments, Feeds, Machines, Segments, RecoveryRecipients). `Peers` is DERIVED from hub/spoke, never stored (a stored peer set is a second answer free to disagree with the membership it is a view of); no private key is held, ever. `Hub` is what makes *a client of someone else's segment* expressible — item 19's crossing. ✅ **the projection resolves it** (`feat/segment-resolve`): interface, address and a DERIVED peer set, with UNADDRESSED (a record with no member entry) as its own legal third state rather than a failure. A hub with no spokes resolves to an empty peer set and ZERO gaps — the "empty is the answer" case. A peer reachable at two addresses is reported, never picked. ✅ **`hz segment set`** (`feat/segment-set`): `--member machine=X,address=…` is a PATCH (absent leaves alone, empty clears) so re-addressing keeps the key and endpoint; `--hub` is separate because a hub is single-valued and a re-hub rewires every derived peer set — printed before the write, since it shows nothing in a diff of the record. A CIDR that would strand members is refused and names each; `--cascade` UNADDRESSES them, never renumbers. ❓ **no way to add a segment to an already-declared machine** — `AddMachine` refuses a duplicate and there is no `hz machine set`, so `segment set --member` can only address machines declared with `--segment` up front. That is the matching gap on the machine side. ✅ **enrolment reports the key** (`feat/segment-key`): per SEGMENT (one machine key would defeat the isolation the model exists for), minted on the box in-process via `crypto/ecdh` X25519 checked against RFC 7748's vector, private half 0600 beside the agent credential and never sent. Trusted on sight because enrolment is ALREADY admin-gated — a second endpoint would be a second trust model for one fact. A re-enrolment with a DIFFERENT key assumes **impostor**: refused, `--rotate-keys` is the deliberate act, and a key conflict never costs the box its credential. The keyless-peer gap now clears end to end through the real handler. ◻ **still not a tunnel**: `projection.Segment.Peers` is machine NAMES, so the projection must grow a peer struct (with `AllowedIPs` derived from CIDR + hub) before anything could write a wg config, and `agent.Desired` has no WireGuard section to apply one. Also open: the `/etc/hosts` NAME is hz's best guess (the peer's machine name) because no record says what a machine answers to on a segment
+
+## Item 17 — The config generation — bless a config ⇒ the unit restarts
+
+◐ **hz's half is done** (build-order item 1, `feat/config-generation`): `projection.Unit.ConfigGeneration` is a sha256 over the resolved sealed values for the unit's address, supplied as ciphertext through `projection.Global` and digested in the pure projection; `SectionConfig` keeps "no config here" (empty, no gap) apart from "hz does not know" (empty + gap), so an empty generation is never a restart. Blessing moves the unit's generation AND the payload fingerprint, so no new change-detection was needed. ✅ **the agent's half landed too** (build-order item 2, `feat/config-restart`): first sighting ADOPTS and restarts nothing, the record is an observation at `/var/lib/hz-agent/generations.json`, and the restart is last in the pass. ⏸ **BOTH HALVES ARE INERT, twice over.** The agent is armed on zero boxes, so nothing acts until item 13 steps 4–5 — AND the live gateway's config manager is **completely empty** (measured 2026-09-23: all seven `cm_*` tables zero rows, read via python's sqlite3 because `sqlite3` is not installed on the box and a bare query silently returned nothing). With no config stored for any address, every `ConfigGeneration` is correctly empty WITH NO GAP — the "that is the answer" case, not the "hz does not know" case. So the loop is whole and waits on a config actually being blessed, which needs the ceremony run for real on the new binary. ✅ the 5s no-backoff retry is fixed (`5ca7611`) — apply-only hold, a new payload is never held
+
+## Item 20 — Screens for the model
+
+◐ **three landed 2026-09-23** on **`dev`** (`feat/model-screens`): `/projects`, `/machines`, `/machines/$machine` (the pure projection, `Unresolved` given equal weight), read-only, in the existing shell. **Ten of [example-projection.md](design/example-projection.md) §4's seventeen states are satisfied, two partly, five not** — and the five are blocked on the MODEL, not the UI: an instance has no port or entry point anywhere, `ProjectResp.Services` is names only, and nothing joins the agent's clock to the instance clock. `MachineProjectionResp` mirrors `projection.MachineConfig` and a **bidirectional** tag test fails the build when either side gains a field — it earned its keep on the merge, catching item 17's `ConfigGeneration` before it could render as empty forever
+
+## Item 21 — Host references — `@name` and `@self`
+
+✅ landed 2026-09-23 on **`dev`** (`feat/host-references`). Driver: the gateway moves to wireless and its own config held **47 occurrences of its address** (31 `internal_dns.ip`, 8 `proxy.backend`, 6 `deploy.next_backend`, `local_interface`, one `HostDecl`). Extends the indirection `Config.Hosts` already had for exporters instead of inventing a second. **The sigil is load-bearing**: `ProxyConfig.Backend` is only `net.SplitHostPort`-checked so it already accepts a DNS name, and resolving a bare `nas:8080` by "is there a HostDecl called nas" would make an existing config's meaning depend on a record added later. `@self` is HA-correct where a literal is not (`peer_sync` pins `LocalInterface` per-instance) and generalises the `localhost`→`LocalInterface` rewrite that was already a magic-string self-reference. Compatibility proven by a golden generated from a **detached worktree at `dev` before the change**, byte-identical at 5480 bytes. ⚠ `DeployConfig.NextBackend` had NO validator and now has one — it can reject a config that loads today. ✅ **`/hosts` screen** (`feat/host-screen`): every host with `@self` first, each dependant showing the AUTHORED value and what it resolves to now, guided address edit naming the consequence. It also fixed a violation it found — Observability sent `ValidateHostRemoval`'s refusal to a snackbar, which eats the lines naming all 31 dependants. ✅ **occurrences are scanned and adoptable** (`feat/host-adopt`): a literal address is found and listed in its OWN list beside references, never merged — a reference FOLLOWS the host, an occurrence does NOT and is exactly what breaks. `hz host adopt self` (dry run; `--confirm` to write) converts them, proven byte-identical against the golden the PRE-reference tree generated. **For the gateway move that is `hz host adopt self --confirm` once, then the address is one field on Settings, per instance.** ⚠ needs the new binary on the box first. It also fixed a live bug: `@self` in an exporter's port-mode `hosts[]` resolved to empty and the scrape target was SILENTLY DROPPED, while the same address written literally produced one
+
+## Item 22 — Edge diagnosis — a failed vantage check names the cause AND the device
+
+✅ landed 2026-09-23 on **`dev`** (`feat/probe-diagnosis`). `Result.Detail` was free prose; hz now classifies a target's whole result SET into a cause key plus prose naming the device, the `projection.Gap` shape applied to reachability. **The router case renders NO button** — the DMZ is on a device hz can neither read nor change, so an instruction is the entire deliverable. Two unknown keys, never `ok`: "nobody ever reported" and "reported then went quiet" have different next actions, and the row list is driven by the TARGET SET so an unprobed name gets a row instead of vanishing. The classifier lives in `internal/monitor`, which `cmd/hz-probe` does not link — the vantage structurally cannot call it. ◐ follow-up in flight: name hz's own address (`Config.LocalInterface`) in the router instruction instead of "the LAN address of the machine running hz"
+
+## Item 23 — hz declares its own machine
+
+✅ **landed 2026-09-24** (`feat/self-machine`) — `hz machine add --self`, and `hz import` proposes the gateway as an editable dry-run row. **The server resolves `--self`, never the CLI**: hz runs where the operator is and the gateway is where hz is, so a client resolving its own hostname would declare the operator's laptop. **The name pin is the point** — hz's `LocalMachineName` and the agent's `machineName` both call `os.Hostname` and already agreed, but nothing asserted it and nothing COULD, since Go cannot import a `main` package; exporting it makes the comparison possible, and the test asks both for their real answer then asserts it IS the kernel's, so agreeing on `"unknown"` also fails. ⚠ **that one test is the ONLY guard** — breaking the agreement reddens nothing else in the suite, because every other test derives both names from one function or hard-codes a literal. Was: The live gateway runs hz, hosts 33 services, 8 projects and 11 environments, and declares **0 machines** — so hz cannot project its own config (`Project(global, machineID)` has no machine to name), cannot be a segment member (the `@self` / item-15 / redline-prod-hz story), renders `/machines` empty on a box that IS a machine, and every segment gap it reports is vacuous rather than informative. **Nothing creates a machine**: `AddMachine` has exactly one caller (`handlers_api_machines.go:79`, the `hz machine add` API) — not deploy, not install, not enrol, not import. **Declare-then-enrol is CORRECT and stays**: enrolment refuses an undeclared machine on purpose, because a box that could declare itself could write itself into the model and then ask for a credential, inverting the trust direction the design rests on. The gateway is the one case where the operator has no reason to be asked — hz is running on it — so import should PROPOSE it (visible, editable, refusable) and `hz machine add --self` should exist, with declaration still a deliberate act. ❓ **nothing expresses "this service fronts that machine"** — `hz.office.iodesystems.com` sits in `unassigned` under a note saying that slot is for services fronting a machine, which is the model noticing the gap and not closing it
+
+## Item 24 — Project-scoped URLs — `/$project/…`
+
+◻ **doc only, 2026-09-24** (`doc/nav-amendment`) — no code touched. [ui.md](design/ui.md) Part 2's Decision 1 rejected project-first nav on three reasons; **reason 2 is measurably false** (it claimed "five of six projects have exactly one environment" — the live estate is 11 environments across 5 projects and **zero** have exactly one; three have none, and the example it reasoned from was 4 of 6, not 5). **Reason 3 survives and is fatal to a *pure* project-first nav**: `config.Machine` is `{Name, Segments, Note}` with no project, deliberately (`internal/config/machine.go:15`), so `gw-1` would have no URL. So the answer is a **split, not a move**, on what the RECORD carries: project-scoped `/$project/…` for `Project`/`Environment`/`Service`/`Segment`/CM-address (and domains, through their service); flat for `Machine`, `HostDecl`, `Zone`, `IPBan`, `WGPeer`, `ServiceCheck`, `PortRange`, `Exporter`. **All 21 routes classified — 4 project-scoped, 17 flat, 0 unresolved.** Four decisions made and argued: dotted `/$project` resolved by LOOKUP not parse (the router carries dots fine — `parseSegment` splits on `/` only — and static routes still win; but **`ValidateProjects` has no charset check at all**, so `hz project add "a.b"` is legal today); **own + descendants with a Location column** (the root owns 9 of 33 services, so own-only makes it useless) showing the row's own project name even on its own page; index-then-select at both widths with the switcher **on the page, not in the nav**; `/projects` `/services` `/domains` all SURVIVE as all-project views (an unassigned service is legal and permanent and has no other home). ⚠ found while checking: **`Segment.Project` is REQUIRED in code** (`internal/config/segment.go:74`, enforced :242/:448) while [example-projection.md](design/example-projection.md):114 asserts `seg:people` has none — settle before the "VPN becomes a segment row" plan lands. **next:** the build task (routes + the `$project` layout + the Location column). **blocking decision (yours):** whether an `AddProject` name guard lands — it would refuse a name that is legal today
+
+## Item 26 — Drill-in navigation — the sidebar IS the project tree
+
+⚠ **SUPERSEDED THE SAME DAY** by item 27 (*one recursive menu*, `feat/nav-recursive`): the two-zone sidebar below was rendered and rejected as cluttered — 24 lines at the top level, 38 inside a project, six of them apologising for bans and clients. What survived: `/$project/machines` (derived, approved-only), `/$project/segments`, the no-detail-route rule and the deleted column/tabs/`isMobile` branch. What went: the two zones, the gateway entries at every depth, the greyed bans/clients block. The record below is kept as written, because it is history.
+
+✅ **built 2026-09-25** (`feat/nav-drill-in`, not merged) — [ui.md](design/ui.md) Part 2, *Decision 1, amended again 2026-09-25*, with a *Built 2026-09-25* section carrying the detail. The sidebar has **two zones**: a project zone that is the nested tree at the top level and, once you enter a project, that project's nav plus its subprojects and a **back that names its destination** (`← iodesystems`, `← All projects` at a root); and a **gateway zone of the same fourteen entries in the same order at every depth**, so Settings is one click from three projects deep. **Nothing about the zone is `useState`** — `readProjectZone` decides from the `$project` parameter alone, which is what makes "open the redline nav" a single screen for two people. Two new routes: **`/$project/machines`**, DERIVED through instances (a machine carries no project; `gw-1` appears under every project it hosts and each row says which of *that* project's instances put it there) and **`/$project/segments`**, direct on `Segment.Project` over `GET /api/v1/segments`, **which the UI had never called**. **The rule that keeps reason 3 intact: a derived surface gets a LIST route and NEVER a detail route** — `/$project/machines/$machine` would give one box one URL per hosting project and its diff one home per URL; the check walks the router's real route table and reddens if anything is ever routed under a derived list (positive-controlled by adding one). Deleted: the 260px tree column (the third column), `ProjectTabs`, its `pathname`-tail derivation, and the `isMobile` branch; `ProjectHeader` keeps identity and loses the picker. ⚠ **the machine list asks for `approved` EXPLICITLY** — `useCMRegistrations()` with no argument keys itself `"all"` and the handler defaults an empty state to PENDING, so the obvious read lists exactly the unapproved boxes and looks plausible; pending are counted and named in their own panel, and a fixture box that exists only in the pending list is what the check asserts is absent. ⚠ **all seven `cm_*` tables are empty on the live gateway**, so every project's machine list is correctly empty there today — the empty state says so in words. ⚠ **at phone width the whole sidebar is a `Drawer`, which is a portal, so the project zone renders NOTHING under SSR and sits behind the hamburger on a real phone** — so the project header keeps a `← parent` link and gained an *"enter a subproject"* row (the way up and the way down, on the page), and the hamburger became a labelled **Menu** button. ❌ `/$project/bans` and `/$project/clients` were **not** built and cannot be: `IPBan.Service` is unvalidated free text that [estate.md](design/estate.md) §8 forbids promoting to scope, and `WGPeer` has neither of the two links a client→segment→project chain needs. Both are rendered in the project nav **greyed with the reason and a link to the gateway screen that does hold the rows** — a removed entry is unaskable. **next:** merge, and the assign control item 24 still owes. **blocking decision (yours):** whether `IPBan` gains scope at all, and `seg:people`.
+
+## ✅ The backup does not contain the database (found 2026-09-20, fixed 2026-10-03)
+
+`internal/server/handlers_backup.go:17` says the export produces *"all state
+needed to clone this server"*. It produces `config.json`, the admin token,
+`wireguard.conf`, `invites.txt` and `certs/`. **It does not contain `hz.db`.**
+
+That database holds the config manager's entire state: enrolled machines,
+registrations and their approvals, every wrapped machine key, and every sealed
+config value. Restoring from a backup today gives you a gateway that serves the
+right domains and has forgotten every box it ever approved.
+
+This surfaced while deciding where recovery wraps live — they went into
+`config.json` precisely *because* the database rides no backup, which is the
+correct call for that feature but leaves the general hole open.
+
+Two things to decide, and they are separable:
+
+- **Does the export gain the database?** It is the obvious fix and it changes
+  what a backup zip is: today the zip is safe-ish to hand around (it already
+  carries the admin token and a WireGuard private key, so "safe" is doing work
+  there); with the DB it carries every wrapped environment key. That is still
+  useless without a machine private key or a recovery key, but the blast radius
+  of a leaked backup changes shape.
+- **Or does the comment stop lying?** If the database is deliberately excluded,
+  the header must say what the zip does *not* restore, and the restore path
+  should say it out loud rather than leaving the operator to find out when a box
+  next tries to resolve.
+
+Nothing here is urgent while nothing is deployed. It becomes urgent the moment
+the config manager holds secrets that exist nowhere else — which is the point of
+the recovery-recipient work that found it.
+
+**Fixed (BK, `0530b91`, deployed `v0.4.0-518`):** the export carries a `VACUUM INTO` snapshot of `hz.db` + build logs + a manifest, verified server-side (integrity, schema == the binary's, row counts); `hz backup pull/verify/install-timer`. Decided: the export DOES gain the database (operator, 2026-10-02). Artifacts and child binaries are excluded and named in the manifest.

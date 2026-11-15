@@ -27,12 +27,12 @@ import type { CMRegistrationResp } from "../api/generated-types";
 // approved registration leaves those boxes unable to open anything sealed under
 // the new key, and until this page there was no way to see which ones.
 
-// An address is (environment, app, role) — the unit an environment key is
-// minted for, and the unit the current-key pointer is set on.
-type Addr = { environment: string; app: string; role: string };
+// An address is (project, environment, app, role) — the unit an environment
+// key is minted for, and the unit the current-key pointer is set on.
+type Addr = { project: string; environment: string; app: string; role: string };
 
 function addrKey(a: Addr): string {
-  return `${a.environment}/${a.app}/${a.role}`;
+  return `${a.project}/${a.environment}/${a.app}/${a.role}`;
 }
 
 // What hz says the current key at one address is. "unannounced" is its own
@@ -91,6 +91,7 @@ function CurrentKeyProbe({
   onAnswer: (key: string, value: AddrKey) => void;
 }) {
   const { data, isLoading, isError } = useCMCurrentKey(
+    addr.project,
     addr.environment,
     addr.app,
     addr.role,
@@ -254,7 +255,16 @@ function RegistrationRow({
   );
 }
 
-export function CMMachines() {
+/**
+ * `projects` scopes the list to the URL that opened it.
+ *
+ * Undefined means the whole gateway. A list keeps only registrations naming one
+ * of those projects — and because a MACHINE carries no project, a machine
+ * hosting instances in two projects appears on both screens with only its own
+ * rows each time. That is the model, not a rendering compromise: an environment
+ * never modifies a machine; it is a coordinate of an instance.
+ */
+export function CMMachines({ projects }: { projects?: string[] }) {
   // There is no "all states" listing: the endpoint defaults to pending and
   // accepts one state at a time. Three queries, merged here, so the counts
   // below describe the whole fleet rather than one filter's worth of it.
@@ -273,15 +283,20 @@ export function CMMachines() {
     });
   }, []);
 
-  const regs = useMemo(
-    () => [...(pending.data ?? []), ...(approved.data ?? []), ...(denied.data ?? [])],
-    [pending.data, approved.data, denied.data],
-  );
+  const regs = useMemo(() => {
+    const all = [...(pending.data ?? []), ...(approved.data ?? []), ...(denied.data ?? [])];
+    return projects ? all.filter((r) => projects.includes(r.project)) : all;
+  }, [pending.data, approved.data, denied.data, projects]);
 
   const addrs = useMemo(() => {
     const seen = new Map<string, Addr>();
     for (const r of regs) {
-      const a: Addr = { environment: r.environment, app: r.app, role: r.role };
+      const a: Addr = {
+        project: r.project,
+        environment: r.environment,
+        app: r.app,
+        role: r.role,
+      };
       const k = addrKey(a);
       if (!seen.has(k)) seen.set(k, a);
     }
@@ -329,9 +344,9 @@ export function CMMachines() {
 
   const counts = {
     all: regs.length,
-    pending: pending.data?.length ?? 0,
-    approved: approved.data?.length ?? 0,
-    denied: denied.data?.length ?? 0,
+    pending: regs.filter((r) => r.state === "pending").length,
+    approved: regs.filter((r) => r.state === "approved").length,
+    denied: regs.filter((r) => r.state === "denied").length,
   };
 
   return (
@@ -347,10 +362,17 @@ export function CMMachines() {
             Machines
           </Typography>
         </Box>
+        {projects ? (
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+            Scoped to {projects.join(", ")}. A machine carries no project of its own, so a box
+            hosting instances in more than one project appears on each of those projects&apos;
+            screens, carrying only the rows that belong there.
+          </Typography>
+        ) : null}
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, maxWidth: 680 }}>
           Every registration hz holds, grouped by machine. One machine has a
-          registration per <code>(environment, app, role)</code> it asks for, and
-          each one is approved separately. No config value appears here or
+          registration per <code>(project, environment, app, role)</code> it asks
+          for, and each one is approved separately. No config value appears here or
           anywhere else in this UI: every value is sealed and hz holds no key.
         </Typography>
 
@@ -368,7 +390,7 @@ export function CMMachines() {
               Those boxes cannot open anything sealed under the current key, so
               their config pulls fail — a rotation is not finished until every
               approved registration at the address has been re-wrapped. There is
-              no re-wrap command today: <code>hz cm approve</code> acts only on a
+              no re-wrap command today: <code>hz config approve</code> acts only on a
               pending registration, so a rotation strands these until that
               exists.
             </Typography>
@@ -383,7 +405,8 @@ export function CMMachines() {
             <Typography variant="body2">
               Nothing has been compared at these addresses — this is not a
               statement that the boxes are up to date. Set the pointer with{" "}
-              <code>hz cm key current &lt;env&gt;/&lt;app&gt;/&lt;role&gt; --set
+              <code>hz config key current
+              &lt;project&gt;/&lt;env&gt;/&lt;app&gt;/&lt;role&gt; --set
               &lt;keyid&gt;</code> and the column becomes meaningful.
             </Typography>
           </Alert>

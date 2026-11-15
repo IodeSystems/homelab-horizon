@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,8 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/iodesystems/homelab-horizon/internal/haproxy"
+	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 	"github.com/iodesystems/homelab-horizon/internal/letsencrypt"
+	"github.com/iodesystems/homelab-horizon/internal/nested"
 	"github.com/iodesystems/homelab-horizon/internal/route53"
 )
 
@@ -31,8 +33,11 @@ func (s *Server) syncServices() {
 		s.monitor.RefreshChecks(s.cfg())
 	}
 
-	// Update DNSMasq
-	if s.cfg().DNSMasqEnabled {
+	// Update DNSMasq — never (re)started on a child that is not running it
+	// (child_sync.go).
+	if s.cfg().DNSMasqEnabled && s.dnsmasqChildSkip() != "" {
+		slog.Info("dnsmasq not synced", "reason", childDNSMasqWhy)
+	} else if s.cfg().DNSMasqEnabled {
 		if err := s.dns.SetRecords(s.cfg().DeriveDNSRecords()); err != nil {
 			slog.Warn("dns.SetMappings", "err", err)
 		}
@@ -44,10 +49,7 @@ func (s *Server) syncServices() {
 	// Update HAProxy
 	if s.cfg().HAProxyEnabled {
 		s.syncHAProxyBackends()
-		var sslConfig *haproxy.SSLConfig
-		if s.cfg().SSLEnabled {
-			sslConfig = &haproxy.SSLConfig{Enabled: true, CertDir: s.cfg().SSLHAProxyCertDir}
-		}
+		sslConfig := haproxySSLFor(s.cfg())
 		if err := s.haproxy.WriteConfig(s.cfg().HAProxyHTTPPort, s.cfg().HAProxyHTTPSPort, sslConfig); err != nil {
 			slog.Warn("haproxy.WriteConfig", "err", err)
 		}
@@ -282,7 +284,11 @@ func (s *Server) runSyncInternal(log SyncLogger, cancelCh <-chan struct{}) {
 	if checkCancelled() {
 		return
 	}
-	if s.cfg().DNSMasqEnabled {
+	if s.cfg().DNSMasqEnabled && s.dnsmasqChildSkip() != "" {
+		// child_sync.go: on a nested hz, never start dnsmasq.
+		log.Step("Skipping DNSMasq")
+		log.Info("  " + childDNSMasqWhy)
+	} else if s.cfg().DNSMasqEnabled {
 		log.Step("Syncing DNSMasq...")
 
 		records := s.cfg().DeriveDNSRecords()
@@ -318,7 +324,7 @@ func (s *Server) runSyncInternal(log SyncLogger, cancelCh <-chan struct{}) {
 
 	// Refresh public IP before deriving records — the user is watching this
 	// stream, so we do it synchronously and surface failures inline.
-	if route53.Available() && s.cfg().PublicIPOverride == "" {
+	if s.cfg().PublicIPOverride == "" {
 		if changed, err := s.refreshPublicIP(); err != nil {
 			log.Warning(fmt.Sprintf("Public IP detection failed: %v", err))
 			if s.cfg().IsPublicIPStale() {
@@ -329,107 +335,164 @@ func (s *Server) runSyncInternal(log SyncLogger, cancelCh <-chan struct{}) {
 		}
 	}
 
+	// Names in zones THIS hz owns that a nested hz asked for: published here,
+	// through the drift-safe path (instance_dns.go).
+	if issuesHere(s.cfg()) && s.cfg().HasInstanceRecords() {
+		if s.dnsSyncBlocked() {
+			log.Step("Skipping hz instance DNS: DNS drift block active (clear drift to resume)")
+		} else {
+			log.Step("Publishing DNS for hz instances...")
+			u, f, err := s.publishAllInstanceDNS(s.newDNSSyncRun())
+			switch {
+			case errors.Is(err, errDNSDriftBlocked):
+				log.Warning("  Halted: an out-of-band change at the provider blocks DNS sync")
+			case err != nil:
+				log.Error(fmt.Sprintf("  hz instance DNS failed: %s", err))
+				hasErrors = true
+			default:
+				log.Success(fmt.Sprintf("  %d record set(s) changed, %d failed", u, f))
+				if f > 0 {
+					hasErrors = true
+				}
+			}
+		}
+	}
+
+	// Names in zones a PARENT owns: asked of the parent. Never blocks the
+	// sync — a parent that does not answer leaves its last answer standing.
+	if s.child != nil && s.child.SendsDNS() {
+		log.Step("Asking parent " + s.child.URL + " to publish this hz's DNS...")
+		st, err := s.child.SyncDNSOnce(context.Background())
+		switch {
+		case st.Unasked != "":
+			log.Warning("  Not asked: " + st.Unasked)
+		case err != nil:
+			log.Warning("  Parent did not answer (" + err.Error() + "); its last answer stands, and the next sync asks again")
+		}
+		if len(st.Records) == 0 && st.Unasked == "" && err == nil {
+			log.Info("  Nothing to ask: no service domain here is in a zone the parent owns")
+		}
+		for _, r := range st.Records {
+			line := "  DNS published by parent: " + nested.DNSLine(r)
+			switch r.Status {
+			case apitypes.InstanceDNSPublished:
+				log.Success(line)
+			case apitypes.InstanceDNSRefused:
+				log.Error(line)
+				hasErrors = true
+			default:
+				log.Warning(line)
+			}
+		}
+	}
+
 	// Step 2: Route53 DNS records (external DNS - needed before SSL certs)
 	// Halted while DNS drift is unresolved: an out-of-band change was detected
 	// and hz must not publish until an operator clears it (see Phase 3 drift
 	// handling). This legacy Route53 path is redundant with sync-all's
 	// dns.Provider publish, which is where drift is actually detected.
-	records := s.cfg().DeriveRoute53Records()
+	records, skipped := s.cfg().DeriveRoute53Plan()
+	for _, sk := range skipped {
+		if sk.Delegated {
+			log.Info("  " + sk.Name + ": published by the parent hz, not here")
+			continue
+		}
+		log.Error("  " + sk.Name + ": not published: " + sk.Reason)
+		hasErrors = true
+	}
 	if s.dnsSyncBlocked() {
 		log.Step("Skipping Route53 DNS sync: DNS drift block active (clear drift to resume)")
-	} else if len(records) > 0 && route53.Available() {
-		log.Step("Syncing Route53 DNS records (parallel)...")
+	} else if len(records) > 0 {
+		log.Step("Syncing external DNS records...")
 
-		// Group records by (Name, Type, ZoneID) for round-robin record sets
-		type recordSetKey struct {
-			Name, Type, ZoneID string
-		}
-		recordSets := make(map[recordSetKey][]route53.Record)
-		var recordSetOrder []recordSetKey
-		for _, rec := range records {
-			key := recordSetKey{rec.Name, rec.Type, rec.ZoneID}
-			if _, exists := recordSets[key]; !exists {
-				recordSetOrder = append(recordSetOrder, key)
-			}
-			recordSets[key] = append(recordSets[key], rec)
-		}
-
-		// Sync results struct for parallel processing
-		type syncResult struct {
-			key     recordSetKey
-			records []route53.Record
-			changed bool
-			err     error
-		}
-
-		// Fan out: sync all record sets in parallel
-		results := make(chan syncResult, len(recordSets))
-		var wg sync.WaitGroup
-
-		for _, key := range recordSetOrder {
-			recs := recordSets[key]
-			wg.Add(1)
-			go func(k recordSetKey, rs []route53.Record) {
-				defer wg.Done()
-				var values []string
-				for _, r := range rs {
-					values = append(values, r.Value)
-				}
-				changed, err := route53.SyncRecordSet(rs[0], values)
-				results <- syncResult{key: k, records: rs, changed: changed, err: err}
-			}(key, recs)
-		}
-
-		// Close results channel when all goroutines complete
-		go func() {
-			wg.Wait()
-			close(results)
-		}()
-
-		// Join: collect results
+		results, perr := s.publishExternalDNS(s.newDNSSyncRun(), records)
 		var sawPermissionError bool
-		var changedRecords []route53.Record
+		var changedRecords []externalDNSResult
 		zoneIDSet := make(map[string]bool)
-
-		for result := range results {
-			rec := result.records[0]
-			profileInfo := ""
-			if rec.AWSProfile != "" {
-				profileInfo = fmt.Sprintf(" [%s]", rec.AWSProfile)
-			}
+		for _, rec := range records {
 			zoneIDSet[rec.ZoneID] = true
-
-			var valuesStr string
-			if len(result.records) == 1 {
-				valuesStr = result.records[0].Value
-			} else {
-				vals := make([]string, len(result.records))
-				for i, r := range result.records {
-					vals[i] = r.Value
-				}
-				valuesStr = strings.Join(vals, ", ")
+		}
+		for _, res := range results {
+			profileInfo := ""
+			if res.Profile != "" {
+				profileInfo = fmt.Sprintf(" [%s]", res.Profile)
 			}
-
-			if result.err != nil {
-				errStr := result.err.Error()
-				log.Error(fmt.Sprintf("  %s%s: %s", rec.Name, profileInfo, errStr))
+			valuesStr := strings.Join(res.Values, ", ")
+			switch {
+			case res.Err != nil:
+				errStr := res.Err.Error()
+				log.Error(fmt.Sprintf("  %s%s: %s", res.Name, profileInfo, errStr))
 				hasErrors = true
 				if strings.Contains(errStr, "AccessDenied") || strings.Contains(errStr, "not authorized") || strings.Contains(errStr, "exit status") {
 					sawPermissionError = true
 				}
-			} else if result.changed {
-				log.Success(fmt.Sprintf("  %s -> %s (updated)", rec.Name, valuesStr))
-				changedRecords = append(changedRecords, result.records...)
-			} else {
-				log.Success(fmt.Sprintf("  %s -> %s (unchanged)", rec.Name, valuesStr))
+			case res.Changed:
+				log.Success(fmt.Sprintf("  %s -> %s (updated)", res.Name, valuesStr))
+				changedRecords = append(changedRecords, res)
+			default:
+				log.Success(fmt.Sprintf("  %s -> %s (unchanged)", res.Name, valuesStr))
+			}
+		}
+		if errors.Is(perr, errDNSDriftBlocked) {
+			log.Error("  External DNS stopped: drift detected (clear drift to resume)")
+			hasErrors = true
+		}
+
+		// Show IAM policy hint if we saw permission errors
+		if sawPermissionError {
+			var zoneIDs []string
+			for zoneID := range zoneIDSet {
+				zoneIDs = append(zoneIDs, zoneID)
+			}
+			log.Warning("  AWS IAM permissions required. Add this policy to your IAM user:")
+			policy := route53.GenerateIAMPolicy(zoneIDs)
+			for _, line := range strings.Split(policy, "\n") {
+				log.Info("  " + line)
 			}
 		}
 
-		// Drive pending deletions and refresh the observed inventory. This runs
-		// on the provider-agnostic dns.Provider path even though the publish
-		// above is the legacy Route53 one — a tombstone must be retracted no
-		// matter which provider the zone uses, and `hz sync` is the entrypoint
-		// operators actually run.
+		// Verify propagation for changed records before proceeding to SSL
+		if len(changedRecords) > 0 {
+			log.Step("Verifying DNS propagation (up to 2 minutes)...")
+			propagationTimeout := 120 * time.Second
+
+			type propagation struct {
+				name    string
+				success bool
+			}
+			var propagationWg sync.WaitGroup
+			propagationResults := make(chan propagation, len(changedRecords))
+			for _, res := range changedRecords {
+				propagationWg.Add(1)
+				go func(name, value string) {
+					defer propagationWg.Done()
+					propagationResults <- propagation{name: name, success: route53.VerifyPropagation(name, value, propagationTimeout)}
+				}(res.Name, res.Values[0])
+			}
+			go func() {
+				propagationWg.Wait()
+				close(propagationResults)
+			}()
+
+			for result := range propagationResults {
+				if result.success {
+					log.Success(fmt.Sprintf("  %s: propagated", result.name))
+				} else {
+					log.Error(fmt.Sprintf("  %s: propagation failed - SSL cert request will be skipped", result.name))
+					unpropagatedDomains[result.name] = true
+					hasErrors = true
+				}
+			}
+		}
+	} else {
+		log.Info("No external services configured, skipping external DNS")
+	}
+
+	// Drive pending deletions and refresh the observed inventory, whether or
+	// not any service has external DNS: a tombstone must be retracted no
+	// matter what else this sync publishes, and `hz sync` is the entrypoint
+	// operators actually run.
+	if !s.dnsSyncBlocked() {
 		if tRetracted, tFailed, terr := s.retractTombstones(s.newDNSSyncRun()); terr != nil {
 			if errors.Is(terr, errDNSDriftBlocked) {
 				log.Warning("  Pending DNS deletions held: drift block active")
@@ -452,62 +515,6 @@ func (s *Server) runSyncInternal(log SyncLogger, cancelCh <-chan struct{}) {
 		} else if n > 0 {
 			log.Info(fmt.Sprintf("  Observed %d record(s) hz does not own", n))
 		}
-
-		// Show IAM policy hint if we saw permission errors
-		if sawPermissionError {
-			var zoneIDs []string
-			for zoneID := range zoneIDSet {
-				zoneIDs = append(zoneIDs, zoneID)
-			}
-			log.Warning("  AWS IAM permissions required. Add this policy to your IAM user:")
-			policy := route53.GenerateIAMPolicy(zoneIDs)
-			for _, line := range strings.Split(policy, "\n") {
-				log.Info("  " + line)
-			}
-		}
-
-		// Verify propagation for changed records before proceeding to SSL
-		if len(changedRecords) > 0 {
-			log.Step("Verifying DNS propagation (up to 2 minutes)...")
-			propagationTimeout := 120 * time.Second
-
-			var propagationWg sync.WaitGroup
-			propagationResults := make(chan struct {
-				name    string
-				success bool
-			}, len(changedRecords))
-
-			for _, rec := range changedRecords {
-				propagationWg.Add(1)
-				go func(r route53.Record) {
-					defer propagationWg.Done()
-					success := route53.VerifyPropagation(r.Name, r.Value, propagationTimeout)
-					propagationResults <- struct {
-						name    string
-						success bool
-					}{name: r.Name, success: success}
-				}(rec)
-			}
-
-			go func() {
-				propagationWg.Wait()
-				close(propagationResults)
-			}()
-
-			for result := range propagationResults {
-				if result.success {
-					log.Success(fmt.Sprintf("  %s: propagated", result.name))
-				} else {
-					log.Error(fmt.Sprintf("  %s: propagation failed - SSL cert request will be skipped", result.name))
-					unpropagatedDomains[result.name] = true
-					hasErrors = true
-				}
-			}
-		}
-	} else if len(records) > 0 {
-		log.Warning("Route53 not available (AWS CLI not configured)")
-	} else {
-		log.Info("No external services configured, skipping Route53")
 	}
 
 	if checkCancelled() {
@@ -682,13 +689,7 @@ func (s *Server) runSyncInternal(log SyncLogger, cancelCh <-chan struct{}) {
 		s.haproxy.SetTLSMinVersion(s.cfg().TLSMinVersion())
 		log.Info(fmt.Sprintf("  Configured %d backends", len(backends)))
 
-		var sslConfig *haproxy.SSLConfig
-		if s.cfg().SSLEnabled {
-			sslConfig = &haproxy.SSLConfig{
-				Enabled: true,
-				CertDir: s.cfg().SSLHAProxyCertDir,
-			}
-		}
+		sslConfig := haproxySSLFor(s.cfg())
 
 		if err := s.haproxy.WriteConfig(s.cfg().HAProxyHTTPPort, s.cfg().HAProxyHTTPSPort, sslConfig); err != nil {
 			log.Error(fmt.Sprintf("  Failed to write config: %s", err))

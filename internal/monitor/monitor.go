@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/iodesystems/homelab-horizon/internal/config"
+	"github.com/iodesystems/homelab-horizon/internal/probe"
 )
 
 // Check states.
@@ -116,6 +117,9 @@ type Monitor struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 	client   *http.Client
+	// insecureClient skips certificate verification. Only a check derived
+	// from an https backend (ServiceCheck.InsecureTLS) uses it.
+	insecureClient *http.Client
 
 	// externalNames keeps remote-vantage check names in discovery order.
 	// Their statuses live in the same map as everything else, but they are
@@ -126,10 +130,21 @@ type Monitor struct {
 	// remoteStates is per-vantage poll state, keyed by probe name.
 	remoteStates map[string]*RemoteState
 
+	// remoteResults is the newest probe result per vantage, keyed by
+	// "<kind>:<host>". The check rows built from these lose the fact the edge
+	// diagnosis needs — a healthy DNS row's answer — so the results are kept
+	// beside them. See diagnose_live.go.
+	remoteResults map[string]map[string]probe.Result
+
 	// remoteCancel stops one vantage's poll loop, keyed by probe name. Each
 	// loop gets its own context so a vantage can be added, edited or removed
 	// without disturbing the others or the local checks.
 	remoteCancel map[string]context.CancelFunc
+
+	// subsystems is the set of hz's own daemons to watch and the probe that
+	// answers for them. Atomic for the same reason config is: the check
+	// goroutines read it while startup is still registering. See subsystem.go.
+	subsystems subsystemsStore
 
 	// checkCancel stops one local check's loop, keyed by check name. Same
 	// reason as remoteCancel: a service being added, parked or deleted has to
@@ -148,6 +163,14 @@ func New(cfg *config.Config) *Monitor {
 		cancel:   cancel,
 		client: &http.Client{
 			Timeout: 10 * time.Second,
+		},
+		// For svc:* checks of an https backend only (ServiceCheck.InsecureTLS):
+		// the same trust HAProxy gives that backend, `ssl verify none`.
+		insecureClient: &http.Client{
+			Timeout: 10 * time.Second,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, // verify none by design: config.BackendProtoHTTPS
+			},
 		},
 	}
 	m.config.Store(cfg)
@@ -192,14 +215,34 @@ func (m *Monitor) getAllChecks() []config.ServiceCheck {
 		//   - self service: hz itself; pointless to self-monitor, so skip.
 		checkType := "ping"
 		var target string
+		var slots []config.CheckSlot
+		insecureTLS := false
 		switch {
 		case svc.Proxy.StaticRoot != "":
 			target = cfg.StaticServeAddr()
 		case svc.Proxy.Backend != "":
-			target = svc.Proxy.Backend
+			// Resolved: the check dials the address, so a host reference has
+			// to have become one first.
+			backend := cfg.ServiceBackend(&svc)
+			if backend == "" {
+				continue
+			}
+			path := ""
 			if svc.Proxy.HealthCheck != nil && svc.Proxy.HealthCheck.Path != "" {
 				checkType = "http"
-				target = "http://" + svc.Proxy.Backend + svc.Proxy.HealthCheck.Path
+				path = svc.Proxy.HealthCheck.Path
+			}
+			insecureTLS = svc.Proxy.BackendProto == config.BackendProtoHTTPS
+			if insecureTLS {
+				checkType = "http"
+			}
+			target = probeTarget(checkType, backend, path, insecureTLS)
+			// Blue-green: HAProxy serves from whichever slot is healthy, so
+			// probing proxy.backend alone reads "failed" on a working service.
+			// Resolved here, on every derive, so a swap moves the check.
+			if d := cfg.ResolvedDeploy(&svc); d != nil && d.NextBackend != "" {
+				slots = deploySlots(d, backend, checkType, path, insecureTLS)
+				target = describeSlots(slots)
 			}
 		default:
 			continue
@@ -221,15 +264,22 @@ func (m *Monitor) getAllChecks() []config.ServiceCheck {
 		}
 
 		checks = append(checks, config.ServiceCheck{
-			Name:     checkName,
-			Type:     checkType,
-			Target:   target,
-			Interval: 300,
-			Enabled:  enabled,
+			Name:        checkName,
+			Type:        checkType,
+			Target:      target,
+			Interval:    300,
+			Enabled:     enabled,
+			Slots:       slots,
+			InsecureTLS: insecureTLS,
 		})
 	}
 
 	checks = append(checks, m.tlsChecks()...)
+
+	// hz's own daemons. Last, so a name collision with a configured check
+	// cannot displace one the admin wrote — the sys: prefix already makes
+	// that impossible, and the ordering keeps the dashboard stable.
+	checks = append(checks, m.subsystemChecks()...)
 
 	return checks
 }
@@ -680,12 +730,16 @@ func (m *Monitor) executeCheck(check config.ServiceCheck) {
 	start := time.Now()
 
 	switch strings.ToLower(check.Type) {
-	case "ping":
-		err = m.doPing(check.Target)
-	case "http":
-		err = m.doHTTP(check.Target)
+	case "ping", "http":
+		if len(check.Slots) > 0 {
+			err = m.doSlots(check.Type, check.Slots, check.InsecureTLS)
+		} else {
+			err = m.probe(check.Type, check.Target, check.InsecureTLS)
+		}
 	case "tls":
 		err = m.doTLS(check.Target)
+	case CheckTypeSubsystem:
+		err = m.doSubsystem(check.Target)
 	default:
 		err = fmt.Errorf("unknown check type: %s", check.Type)
 	}
@@ -759,6 +813,109 @@ func (m *Monitor) executeCheck(check config.ServiceCheck) {
 	}
 }
 
+// probe runs one ping or http probe. insecureTLS skips certificate
+// verification; only a check derived from an https backend sets it.
+func (m *Monitor) probe(checkType, target string, insecureTLS bool) error {
+	if strings.EqualFold(checkType, "http") {
+		if insecureTLS {
+			return m.doHTTPWith(m.insecureClient, target)
+		}
+		return m.doHTTP(target)
+	}
+	return m.doPing(target)
+}
+
+// probeTarget is what a ping or http probe of a backend dials. A backend that
+// serves only TLS (backend_proto "https") is always probed over https: a ping
+// of it proves only the port is open, and an http:// probe of a TLS port
+// fails every time.
+func probeTarget(checkType, addr, path string, tls bool) string {
+	if tls {
+		if path == "" {
+			path = "/"
+		}
+		return "https://" + addr + path
+	}
+	if checkType == "http" {
+		return "http://" + addr + path
+	}
+	return addr
+}
+
+// deploySlots lists a blue-green service's two slots in HAProxy's order: next
+// first, then current (render.go; under `balance first`, next serves whenever
+// it is up). d must be resolved (Config.ResolvedDeploy), backend the resolved
+// proxy.backend.
+func deploySlots(d *config.DeployConfig, backend, checkType, path string, tls bool) []config.CheckSlot {
+	a := config.CheckSlot{Slot: "a", Current: d.ActiveSlot != "b", Addr: backend}
+	b := config.CheckSlot{Slot: "b", Current: d.ActiveSlot == "b", Addr: d.NextBackend}
+	a.Target = probeTarget(checkType, a.Addr, path, tls)
+	b.Target = probeTarget(checkType, b.Addr, path, tls)
+	if a.Current {
+		return []config.CheckSlot{b, a}
+	}
+	return []config.CheckSlot{a, b}
+}
+
+// slotName is "slot b (next) 192.0.2.5:6300". It names the slot's ROLE, never
+// "active": which slot serves is HAProxy's live answer, not a config field.
+func slotName(s config.CheckSlot) string {
+	role := "next"
+	if s.Current {
+		role = "current"
+	}
+	return fmt.Sprintf("slot %s (%s) %s", s.Slot, role, s.Addr)
+}
+
+// describeSlots is the Target of a blue-green check. It names both slots and
+// their roles, so an edited active_slot or slot address changes it, and
+// RefreshChecks restarts the check on the new resolution.
+func describeSlots(slots []config.CheckSlot) string {
+	parts := make([]string, len(slots))
+	for i, s := range slots {
+		parts[i] = slotName(s)
+	}
+	return strings.Join(parts, ", ")
+}
+
+// doSlots probes every slot of a blue-green service and reads the result the
+// way HAProxy does: the service is up if any slot answers.
+//
+//   - every slot up: ok.
+//   - some slot down, another up: a warning naming the down slot. The service
+//     works, so it is not a failure; a slot that cannot take over is still a
+//     fact the operator must see, so it is not silent.
+//   - no slot up: failed.
+func (m *Monitor) doSlots(checkType string, slots []config.CheckSlot, insecureTLS bool) error {
+	errs := make([]error, len(slots))
+	var wg sync.WaitGroup
+	for i, s := range slots {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs[i] = m.probe(checkType, s.Target, insecureTLS)
+		}()
+	}
+	wg.Wait()
+
+	var down, up []string
+	for i, s := range slots {
+		if errs[i] != nil {
+			down = append(down, fmt.Sprintf("%s down (%v)", slotName(s), errs[i]))
+		} else {
+			up = append(up, slotName(s))
+		}
+	}
+	switch {
+	case len(down) == 0:
+		return nil
+	case len(up) == 0:
+		return fmt.Errorf("no slot answers: %s", strings.Join(down, "; "))
+	default:
+		return Warnf("%s; serving from %s", strings.Join(down, "; "), strings.Join(up, ", "))
+	}
+}
+
 // doPing performs an ICMP-like ping check (TCP connect fallback)
 func (m *Monitor) doPing(target string) error {
 	// Use TCP connect to port 80 as a ping substitute (ICMP requires root)
@@ -788,13 +945,15 @@ func (m *Monitor) doPing(target string) error {
 }
 
 // doHTTP performs an HTTP GET check
-func (m *Monitor) doHTTP(target string) error {
+func (m *Monitor) doHTTP(target string) error { return m.doHTTPWith(m.client, target) }
+
+func (m *Monitor) doHTTPWith(client *http.Client, target string) error {
 	req, err := http.NewRequestWithContext(m.ctx, "GET", target, nil)
 	if err != nil {
 		return fmt.Errorf("invalid URL: %w", err)
 	}
 
-	resp, err := m.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
@@ -937,6 +1096,10 @@ func (m *Monitor) sendNotification(check config.ServiceCheck, checkErr error, st
 	req.Header.Set("Title", title)
 	req.Header.Set("Priority", priority)
 	req.Header.Set("Tags", tags)
+	// ntfy's access-token scheme. No token, no header: a public topic.
+	if cfg.NtfyToken != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.NtfyToken)
+	}
 
 	resp, err := m.client.Do(req)
 	if err != nil {

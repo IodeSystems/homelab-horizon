@@ -52,7 +52,7 @@ function relativeTime(isoStr: string | undefined): string {
 }
 
 function address(reg: CMRegistrationResp): string {
-  return `${reg.environment}/${reg.app}/${reg.role}`;
+  return `${reg.project}/${reg.environment}/${reg.app}/${reg.role}`;
 }
 
 // A command to run somewhere else. Matches RemoteVantages' CopyBox: a
@@ -135,7 +135,7 @@ function FingerprintBlock({ fingerprint }: { fingerprint: string }) {
         </Typography>
       )}
       <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
-        Not the value to compare against. <code>hz cm approve</code> asks you to
+        Not the value to compare against. <code>hz config approve</code> asks you to
         type the fingerprint the <strong>box</strong> printed when it generated
         its key — read it off that console. If hz substituted its own public key,
         it substituted this line too, so matching the CLI against this page
@@ -245,7 +245,7 @@ function PendingRow({
       <Typography variant="caption" sx={{ display: "block", mt: 1.5, mb: 0.5, fontWeight: 600 }}>
         Approve it from a terminal
       </Typography>
-      <CopyBox text={`hz cm approve ${reg.id}`} />
+      <CopyBox text={`hz config approve ${reg.id}`} />
       <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
         The command wraps this environment's key to the box's public key on your
         machine; the key itself never reaches hz. It will refuse to send anything
@@ -255,7 +255,16 @@ function PendingRow({
   );
 }
 
-export function CMApprovals() {
+/**
+ * `projects` scopes the queue to the URL that opened it.
+ *
+ * Undefined means the whole gateway, which is what the flat surface asked for.
+ * A list means "only registrations naming one of these projects" — the project
+ * screen's scope, passed down rather than re-derived — and the scope is STATED
+ * on the card, because a filtered queue that does not say it is filtered is how
+ * a waiting box goes unnoticed.
+ */
+export function CMApprovals({ projects }: { projects?: string[] }) {
   const { data, isLoading, error } = useCMRegistrations("pending");
   const deny = useCMDeny();
 
@@ -272,7 +281,9 @@ export function CMApprovals() {
     );
   }
 
-  const pending = data ?? [];
+  const everything = data ?? [];
+  const pending = projects ? everything.filter((r) => projects.includes(r.project)) : everything;
+  const hidden = everything.length - pending.length;
 
   function openDeny(reg: CMRegistrationResp) {
     setDenying(reg);
@@ -304,6 +315,14 @@ export function CMApprovals() {
             <Chip size="small" color="primary" label={pending.length} sx={{ height: 20 }} />
           )}
         </Box>
+        {projects ? (
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+            Scoped to {projects.join(", ")}.{" "}
+            {hidden > 0
+              ? `${hidden} registration${hidden === 1 ? "" : "s"} waiting under other projects ${hidden === 1 ? "is" : "are"} not shown here — open that project to see ${hidden === 1 ? "it" : "them"}.`
+              : "No registration is waiting under any other project."}
+          </Typography>
+        ) : null}
         <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, maxWidth: 680 }}>
           Boxes that have enrolled and are waiting for an environment key.
           Approving one happens in the <code>hz</code> CLI on your own machine,

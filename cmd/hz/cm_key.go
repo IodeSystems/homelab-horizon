@@ -17,7 +17,7 @@ import (
 	"github.com/iodesystems/homelab-horizon/internal/apitypes"
 )
 
-// `hz cm key` is the only place environment keys are handled, and it handles
+// `hz config key` is the only place environment keys are handled, and it handles
 // them in exactly three ways: mint one into the keystore, print one to a
 // terminal for a password manager, and read one back in from stdin.
 //
@@ -28,7 +28,7 @@ import (
 
 func runCMKey(c *client, args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("cm key subcommand required: new | ls | export | import | current")
+		return fmt.Errorf("config key subcommand required: new | ls | export | import | current")
 	}
 	sub, rest := args[0], args[1:]
 	switch sub {
@@ -43,7 +43,7 @@ func runCMKey(c *client, args []string) error {
 	case "current":
 		return cmKeyCurrent(c, rest)
 	default:
-		return fmt.Errorf("unknown cm key subcommand: %s", sub)
+		return fmt.Errorf("unknown config key subcommand: %s", sub)
 	}
 }
 
@@ -54,7 +54,7 @@ func runCMKey(c *client, args []string) error {
 func defaultKeyLabel(now time.Time) string { return now.UTC().Format("2006-01") }
 
 func cmKeyNew(c *client, args []string) error {
-	fs := flag.NewFlagSet("cm key new", flag.ContinueOnError)
+	fs := flag.NewFlagSet("config key new", flag.ContinueOnError)
 	label := fs.String("label", "", "human label for the key file (default: the current year-month)")
 	setCurrent := fs.Bool("set-current", false, "also publish this key's ID as hz's current-key pointer for the address")
 	pos, rest := splitCMPositional(args)
@@ -65,7 +65,7 @@ func cmKeyNew(c *client, args []string) error {
 		pos = fs.Arg(0)
 	}
 	if pos == "" || fs.NArg() > 1 {
-		return fmt.Errorf("usage: hz cm key new <environment>/<app>/<role> [--label L] [--set-current]")
+		return fmt.Errorf("usage: hz config key new <project>/<environment>/<app>/<role> [--label L] [--set-current]")
 	}
 	addr, err := parseCMAddr(pos)
 	if err != nil {
@@ -94,11 +94,39 @@ func cmKeyNew(c *client, args []string) error {
 	}
 	id := key.ID()
 	fmt.Printf("Minted %s (%s) for %s.\n", id, *label, addr)
-	fmt.Printf("  %s\n", filepath.Join(ks.Root(), "secrets", "keys", addr.Environment, addr.App, addr.Role, *label+"."+id.String()+".key"))
+	fmt.Printf("  %s\n", filepath.Join(ks.Root(), "secrets", "keys",
+		addr.Project, addr.Environment, addr.App, addr.Role, *label+"."+id.String()+".key"))
 	fmt.Println()
-	fmt.Println("This machine is the only copy. hz never holds an environment key, so there is")
-	fmt.Println("nothing to restore from. Back it up now:")
-	fmt.Printf("  hz cm key export %s\n", addr)
+
+	// Custody, automatically, at the one moment an environment key comes into
+	// existence on a client. This is the whole reason the recovery recipient is
+	// a LIST in hz's config rather than a step in a runbook: the recipient set
+	// is fixed when a key is wrapped, so a key minted before somebody remembers
+	// to wrap it is a key that has to be re-wrapped later, by hand, from this
+	// exact machine. Nobody remembers.
+	//
+	// It is an ERROR, not a warning, when it fails. The key is already on disk,
+	// so nothing is lost — but a key with no custody that reported success is
+	// precisely the silent state this feature exists to make impossible, and
+	// the message says what to run.
+	wrapped, wrapErr := cmWrapToRecovery(c, addr, id.String(), key)
+	switch {
+	case wrapErr != nil:
+		fmt.Printf("The key is on disk at the path above and is usable.\n\n")
+		return fmt.Errorf("key %s was minted, but wrapping it to the recovery recipients failed: %w\n"+
+			"  this key currently exists in ONE place: this machine's keystore.\n"+
+			"  close that as soon as hz is reachable:  hz config recovery backfill", id, wrapErr)
+	case wrapped > 0:
+		fmt.Printf("Wrapped to %d recovery recipient(s); hz now holds a blob only a recovery private\n", wrapped)
+		fmt.Println("key can open. That a wrap exists is not proof it opens — prove it:")
+		fmt.Printf("  hz config recovery verify %s\n", addr)
+	default:
+		fmt.Println("No recovery recipients are registered, so this key exists in exactly one place:")
+		fmt.Println("this machine's keystore. hz never holds an environment key, so there is nothing")
+		fmt.Println("to restore from. Either set up custody, or back it up by hand:")
+		fmt.Println("  hz config recovery keygen --name <name>    # then 'add', then 'backfill'")
+		fmt.Printf("  hz config key export %s\n", addr)
+	}
 
 	if len(held) > 0 {
 		fmt.Println()
@@ -113,7 +141,7 @@ func cmKeyNew(c *client, args []string) error {
 		}
 		fmt.Printf("\nhz now calls %s current for %s.\n", id, addr)
 	} else if len(held) > 0 {
-		fmt.Printf("\nWhen every holder has this key:  hz cm key current %s --set %s\n", addr, id)
+		fmt.Printf("\nWhen every holder has this key:  hz config key current %s --set %s\n", addr, id)
 	}
 	return nil
 }
@@ -122,7 +150,7 @@ func cmKeyNew(c *client, args []string) error {
 // material is never rendered by anything but `export`, and then only to a
 // terminal.
 func cmKeyList(args []string) error {
-	fs := flag.NewFlagSet("cm key ls", flag.ContinueOnError)
+	fs := flag.NewFlagSet("config key ls", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "output raw JSON")
 	pos, rest := splitCMPositional(args)
 	if err := fs.Parse(rest); err != nil {
@@ -132,7 +160,7 @@ func cmKeyList(args []string) error {
 		pos = fs.Arg(0)
 	}
 	if fs.NArg() > 1 {
-		return fmt.Errorf("usage: hz cm key ls [<environment>/<app>/<role>]")
+		return fmt.Errorf("usage: hz config key ls [<project>/<environment>/<app>/<role>]")
 	}
 	ks, err := configmgr.DefaultKeystore()
 	if err != nil {
@@ -197,7 +225,7 @@ func cmKeyList(args []string) error {
 //
 // This walks directory NAMES with os.ReadDir, which the keystore itself never
 // does, and the distinction matters: nothing found here is opened or trusted.
-// Each candidate triple is handed back to Keystore.List, which re-validates
+// Each candidate address is handed back to Keystore.List, which re-validates
 // every segment and re-walks the tree with openat(2) and its own permission
 // checks. A directory whose name is not a legal segment is skipped rather than
 // reported, because it is not a key by definition — the keystore could never
@@ -205,22 +233,30 @@ func cmKeyList(args []string) error {
 func cmKeyAddresses(ks *configmgr.Keystore) ([]configmgr.EnvKeyAddr, error) {
 	root := filepath.Join(ks.Root(), "secrets", "keys")
 	var out []configmgr.EnvKeyAddr
-	envs, err := readDirNames(root)
+	projects, err := readDirNames(root)
 	if err != nil {
 		return nil, err
 	}
-	for _, env := range envs {
-		apps, err := readDirNames(filepath.Join(root, env))
+	for _, project := range projects {
+		envs, err := readDirNames(filepath.Join(root, project))
 		if err != nil {
 			return nil, err
 		}
-		for _, app := range apps {
-			roles, err := readDirNames(filepath.Join(root, env, app))
+		for _, env := range envs {
+			apps, err := readDirNames(filepath.Join(root, project, env))
 			if err != nil {
 				return nil, err
 			}
-			for _, role := range roles {
-				out = append(out, configmgr.EnvKeyAddr{Environment: env, App: app, Role: role})
+			for _, app := range apps {
+				roles, err := readDirNames(filepath.Join(root, project, env, app))
+				if err != nil {
+					return nil, err
+				}
+				for _, role := range roles {
+					out = append(out, configmgr.EnvKeyAddr{
+						Project: project, Environment: env, App: app, Role: role,
+					})
+				}
 			}
 		}
 	}
@@ -253,7 +289,7 @@ func readDirNames(dir string) ([]string, error) {
 // legitimate machine-to-machine path is the keystore itself — copy the key
 // FILE, which carries its own mode, its created_at and its label.
 func cmKeyExport(args []string) error {
-	fs := flag.NewFlagSet("cm key export", flag.ContinueOnError)
+	fs := flag.NewFlagSet("config key export", flag.ContinueOnError)
 	id := fs.String("id", "", "which key to export, when the address holds more than one")
 	pos, rest := splitCMPositional(args)
 	if err := fs.Parse(rest); err != nil {
@@ -263,7 +299,7 @@ func cmKeyExport(args []string) error {
 		pos = fs.Arg(0)
 	}
 	if pos == "" || fs.NArg() > 1 {
-		return fmt.Errorf("usage: hz cm key export <environment>/<app>/<role> [--id KEYID]")
+		return fmt.Errorf("usage: hz config key export <project>/<environment>/<app>/<role> [--id KEYID]")
 	}
 	addr, err := parseCMAddr(pos)
 	if err != nil {
@@ -302,7 +338,7 @@ func cmKeyExport(args []string) error {
 	for _, k := range held {
 		if k.ID.String() == want {
 			fmt.Fprintf(os.Stderr, "# store the created_at too; import needs it:\n")
-			fmt.Fprintf(os.Stderr, "#   hz cm key import %s --label %s --created-at %s\n",
+			fmt.Fprintf(os.Stderr, "#   hz config key import %s --label %s --created-at %s\n",
 				addr, k.Label, k.CreatedAt.UTC().Format(time.RFC3339))
 		}
 	}
@@ -340,7 +376,7 @@ func cmSelectKey(addr configmgr.EnvKeyAddr, held []configmgr.KeyInfo, id string)
 // file path argument invites `--key-file <(echo ...)` which is argv again one
 // level down.
 func cmKeyImport(args []string) error {
-	fs := flag.NewFlagSet("cm key import", flag.ContinueOnError)
+	fs := flag.NewFlagSet("config key import", flag.ContinueOnError)
 	label := fs.String("label", "", "human label for the key file (default: the current year-month)")
 	createdAt := fs.String("created-at", "", "RFC3339 created_at from the exporting machine (default: now)")
 	pos, rest := splitCMPositional(args)
@@ -351,7 +387,7 @@ func cmKeyImport(args []string) error {
 		pos = fs.Arg(0)
 	}
 	if pos == "" || fs.NArg() > 1 {
-		return fmt.Errorf("usage: hz cm key import <environment>/<app>/<role> [--label L] [--created-at T] < key.txt")
+		return fmt.Errorf("usage: hz config key import <project>/<environment>/<app>/<role> [--label L] [--created-at T] < key.txt")
 	}
 	addr, err := parseCMAddr(pos)
 	if err != nil {
@@ -403,7 +439,7 @@ func cmKeyImport(args []string) error {
 // crosses the wire; hz has handled key IDs since the envelope format existed,
 // so this discloses nothing it does not already index by.
 func cmKeyCurrent(c *client, args []string) error {
-	fs := flag.NewFlagSet("cm key current", flag.ContinueOnError)
+	fs := flag.NewFlagSet("config key current", flag.ContinueOnError)
 	set := fs.String("set", "", "publish this key ID as current for the address")
 	pos, rest := splitCMPositional(args)
 	if err := fs.Parse(rest); err != nil {
@@ -413,7 +449,7 @@ func cmKeyCurrent(c *client, args []string) error {
 		pos = fs.Arg(0)
 	}
 	if pos == "" || fs.NArg() > 1 {
-		return fmt.Errorf("usage: hz cm key current <environment>/<app>/<role> [--set KEYID]")
+		return fmt.Errorf("usage: hz config key current <project>/<environment>/<app>/<role> [--set KEYID]")
 	}
 	addr, err := parseCMAddr(pos)
 	if err != nil {
@@ -428,7 +464,7 @@ func cmKeyCurrent(c *client, args []string) error {
 		}
 		fmt.Printf("hz now calls %s current for %s.\n", *set, addr)
 		fmt.Println("Boxes still holding an older key cannot open anything sealed under this one")
-		fmt.Println("until they are re-approved. 'hz cm pending --all' shows which key each holds.")
+		fmt.Println("until they are re-approved. 'hz config pending --all' shows which key each holds.")
 		return nil
 	}
 	cur, err := cmCurrentKey(c, addr)
@@ -441,9 +477,10 @@ func cmKeyCurrent(c *client, args []string) error {
 
 func cmSetCurrentKey(c *client, addr configmgr.EnvKeyAddr, id string) error {
 	q := url.Values{
-		apitypes.CMQueryEnv:  {addr.Environment},
-		apitypes.CMQueryApp:  {addr.App},
-		apitypes.CMQueryRole: {addr.Role},
+		apitypes.CMQueryProject: {addr.Project},
+		apitypes.CMQueryEnv:     {addr.Environment},
+		apitypes.CMQueryApp:     {addr.App},
+		apitypes.CMQueryRole:    {addr.Role},
 	}
 	return c.do(http.MethodPut, cmAPI+"/current-key?"+q.Encode(), apitypes.CMCurrentKeyReq{KeyID: id}, nil)
 }

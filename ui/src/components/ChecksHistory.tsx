@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Alert, Box, Button, Chip, Paper, Stack, Typography } from "@mui/material";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
+import { CheckId } from "./CheckId";
 import type { BucketedHistoryResponse, HistorySeries } from "../api/types";
 
 // Fleet check history.
@@ -363,12 +364,7 @@ function GroupBlock({
           part of a status page people learn to stop reading. */}
       {eventful.map((s) => (
         <Box key={s.name} sx={{ mt: 0.75 }}>
-          <Typography
-            variant="caption"
-            sx={{ fontFamily: "monospace", fontSize: "0.68rem", color: "text.secondary" }}
-          >
-            {s.name}
-          </Typography>
+          <CheckId id={s.name} />
           <Ribbon
             runs={s.runs as Run[]}
             buckets={buckets}
@@ -393,12 +389,7 @@ function GroupBlock({
           {showSteady &&
             steady.map((s) => (
               <Box key={s.name} sx={{ mt: 0.5 }}>
-                <Typography
-                  variant="caption"
-                  sx={{ fontFamily: "monospace", fontSize: "0.68rem", color: "text.secondary" }}
-                >
-                  {s.name}
-                </Typography>
+                <CheckId id={s.name} />
                 <Ribbon
                   runs={s.runs as Run[]}
                   buckets={buckets}

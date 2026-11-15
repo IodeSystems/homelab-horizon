@@ -560,6 +560,19 @@ func TestValidateService(t *testing.T) {
 			wantErr: "",
 		},
 		{
+			name: "backend_proto https on a real backend",
+			svc: Service{Name: "kvm", Domains: []string{"kvm.example.com"},
+				Proxy: &ProxyConfig{Backend: "192.168.1.171:443", BackendProto: "https"}},
+			wantErr: "",
+		},
+		{
+			// hz's own file server speaks plain HTTP; TLS to it would break the site.
+			name: "backend_proto https on a static service",
+			svc: Service{Name: "docs", Domains: []string{"docs.example.com"},
+				Proxy: &ProxyConfig{StaticRoot: "/srv/docs", BackendProto: "https"}},
+			wantErr: "proxy.backend_proto",
+		},
+		{
 			name: "public_paths on an internal-only service",
 			svc: Service{Name: "index", Domains: []string{"index.example.com"},
 				Proxy: &ProxyConfig{Backend: "127.0.0.1:3000", InternalOnly: true,
@@ -1188,7 +1201,7 @@ func TestDeriveStaticRoot(t *testing.T) {
 // than cosmetic.
 func TestDeriveRoute53RecordsTTL(t *testing.T) {
 	cfg := &Config{
-		Zones: []Zone{{Name: "example.com", ZoneID: "Z1"}},
+		Zones: []Zone{{Name: "example.com", ZoneID: "Z1", DNSProvider: &DNSProviderConfig{Type: DNSProviderRoute53, AWSProfile: "p"}}},
 		Services: []Service{
 			{
 				Name:        "vpn",

@@ -8,16 +8,7 @@ import {
   CardHeader,
   Chip,
   CircularProgress,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogContentText,
-  DialogTitle,
-  FormControl,
-  InputLabel,
-  MenuItem,
   Paper,
-  Select,
   Stack,
   Table,
   TableBody,
@@ -31,15 +22,11 @@ import {
 } from "@mui/material";
 import {
   useAptAudit,
-  useCreateWGConfig,
-  useEnableHorizon,
-  useFixHAProxyLogging,
+  useDoctor,
   useFixIPForwarding,
   useFixMasquerade,
   useFixWGForwardChain,
   useFixWGRules,
-  useInstallHorizonUnit,
-  useInstallPackage,
   useRequestCert,
   useRefreshPublicIP,
   useReloadDNSMasq,
@@ -50,56 +37,129 @@ import {
   useWriteDNSMasqConfig,
   useFixLogRetention,
 } from "../api/hooks";
-import type { ComponentHealth, SystemHealth, Zone } from "../api/types";
+import type { ComponentHealth, DoctorFinding, SystemHealth, Zone } from "../api/types";
 import { SystemMetricsCard } from "./SystemMetricsCard";
 
-// CheckRow renders one line: label + status chip + optional fix button.
+// The one command that installs every missing dependency, named once so the
+// three "binary installed" rows cannot drift apart or from the CLI's own
+// dependencyFixHint (cmd/homelab-horizon/deps.go).
+//
+// There is no install button any more, and that is deliberate rather than an
+// omission: an HTTP request that causes `apt-get install` on a live gateway can
+// pull a dependency that restarts a daemon carrying production traffic, at a
+// moment nobody chose (privilege-classification.md §3.1 #8, §3.5). You also
+// cannot open the admin UI of a gateway whose dependencies are missing badly
+// enough to matter — so the remedy has to be something a human at the box, or
+// a provisioning script, can run.
+const INSTALL_DEPS_HINT = "sudo homelab-horizon install-deps";
+
+// Two more remedies hz reports but will not perform, for the same reason and in
+// the same shape. Both endpoints existed until 2026-09-25 and both worked by
+// piping an hz-built shell string through `systemd-run … bash -c` to escape
+// hz's own sandbox — a web process that can do that is not de-rooted, whatever
+// uid it holds (plan/design/privilege-audit.md §5.2 rules 1 and 3).
+//
+// The diagnosis stays exactly where it was. What changed is who acts on it.
+const CREATE_WG_CONFIG_HINT = "sudo hz-agent wg-create-config";
+const FIX_HAPROXY_LOGGING_HINT = "sudo homelab-horizon fix-haproxy-logging";
+
+// CheckRow renders one line: label + status chip + either a fix button or,
+// where hz deliberately has no button, the exact command that fixes it.
 // Keep the shape uniform across all component cards so the dashboard reads
 // as a consistent grid.
+//
+// `runToFix` is the second kind of remedy and is never a weaker version of the
+// first. A check whose fix hz will not perform on its own behalf still has to
+// say what to do — a row that only reports a red chip is a dead end, and "the
+// button used to be here" is not something an operator can know.
+//
+// `unknown` is the THIRD state, and it is not a shade of failing. hz could not
+// measure the fact: not "it is wrong", not "it is fine". Rendering it as either
+// is this repo's founding bug (an empty value indistinguishable from an absent
+// one), so it gets its own chip, its own colour and its own hint — because what
+// an operator does about "I could not read it" is not what they do about "it is
+// broken".
 function CheckRow({
   label,
   ok,
+  unknown,
+  warning,
   failingLabel,
   okLabel = "OK",
+  unknownLabel = "Unknown",
   fix,
   fixLabel = "Fix",
   fixDisabled,
   fixRunning,
+  runToFix,
+  unknownHint,
 }: {
   label: string;
   ok: boolean;
+  unknown?: boolean;
+  // warning: a risk the operator may accept. Not ok, not failing.
+  warning?: boolean;
   failingLabel?: string;
   okLabel?: string;
+  unknownLabel?: string;
   fix?: () => void;
   fixLabel?: string;
   fixDisabled?: boolean;
   fixRunning?: boolean;
+  runToFix?: string;
+  unknownHint?: string;
 }) {
+  // Unknown wins over ok: a caller that computed `ok` from facts it could not
+  // read must not render a green chip because the unreadable half defaulted.
+  const state: "ok" | "unknown" | "warning" | "failing" = unknown
+    ? "unknown"
+    : warning
+      ? "warning"
+      : ok
+        ? "ok"
+        : "failing";
+  const hint = state === "unknown" ? (unknownHint ?? runToFix) : runToFix;
+  const hintLead = state === "unknown" ? "Check it on this host:" : "Run on this host:";
   return (
     <Stack
-      direction="row"
-     
-      spacing={2}
-      sx={{ alignItems: "center", py: 0.75, borderBottom: 1, borderColor: "divider" }}
+      sx={{ py: 0.75, borderBottom: 1, borderColor: "divider" }}
     >
-      <Typography variant="body2" sx={{ flex: 1 }}>
-        {label}
-      </Typography>
-      <Chip
-        size="small"
-        label={ok ? okLabel : (failingLabel ?? "Missing")}
-        color={ok ? "success" : "error"}
-        variant={ok ? "outlined" : "filled"}
-      />
-      {!ok && fix && (
-        <Button
+      <Stack direction="row" spacing={2} sx={{ alignItems: "center" }}>
+        <Typography variant="body2" sx={{ flex: 1 }}>
+          {label}
+        </Typography>
+        <Chip
           size="small"
-          variant="contained"
-          onClick={fix}
-          disabled={fixDisabled || fixRunning}
-        >
-          {fixRunning ? <CircularProgress size={16} /> : fixLabel}
-        </Button>
+          label={
+            state === "ok"
+              ? okLabel
+              : state === "unknown"
+                ? unknownLabel
+                : state === "warning"
+                  ? "Warning"
+                  : (failingLabel ?? "Missing")
+          }
+          color={state === "ok" ? "success" : state === "failing" ? "error" : "warning"}
+          variant={state === "ok" || state === "warning" ? "outlined" : "filled"}
+        />
+        {state === "failing" && fix && (
+          <Button
+            size="small"
+            variant="contained"
+            onClick={fix}
+            disabled={fixDisabled || fixRunning}
+          >
+            {fixRunning ? <CircularProgress size={16} /> : fixLabel}
+          </Button>
+        )}
+      </Stack>
+      {state !== "ok" && hint && (
+        <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
+          {hintLead}{" "}
+          <Box component="code" sx={{ fontFamily: "monospace", userSelect: "all" }}>
+            {hint}
+          </Box>
+        </Typography>
       )}
     </Stack>
   );
@@ -259,12 +319,151 @@ function RangeAdvice({ health }: { health: SystemHealth }) {
   );
 }
 
+// DoctorRows renders `hz doctor`'s findings as CheckRows: failing in red with
+// its fix, a warning (failing only under --pci) outlined with its fix, unknown as unknown (a check hz could not run, never a green one),
+// info as a note that still shows its next step, ok as ok.
+export function DoctorRows({ findings }: { findings: DoctorFinding[] }) {
+  const order = { failing: 0, warning: 1, unknown: 2, info: 3, ok: 4 } as Record<string, number>;
+  const sorted = [...findings].sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9));
+  return (
+    <>
+      {sorted.map((f, i) => (
+        <Box key={`${f.check}:${f.subject}:${i}`}>
+          <CheckRow
+            label={`${f.check} · ${f.subject} — ${f.problem}`}
+            ok={f.status === "ok" || f.status === "info"}
+            unknown={f.status === "unknown"}
+            warning={f.status === "warning"}
+            okLabel={f.status === "info" ? "Note" : "OK"}
+            failingLabel="Failing"
+            runToFix={f.fix || undefined}
+            unknownHint={f.fix || undefined}
+          />
+          {f.status === "info" && f.fix && (
+            <Typography variant="caption" color="text.secondary" component="div" sx={{ pb: 0.5 }}>
+              Next:{" "}
+              <Box component="code" sx={{ fontFamily: "monospace", userSelect: "all" }}>
+                {f.fix}
+              </Box>
+            </Typography>
+          )}
+        </Box>
+      ))}
+    </>
+  );
+}
+
+// DoctorCard — `hz doctor` on this page: the same list, from GET
+// /api/v1/doctor. The deep checks read DNS providers and public DNS, so they
+// run only on the button, never on the poll.
+function DoctorCard() {
+  const [deep, setDeep] = useState(false);
+  const { data, isFetching, error } = useDoctor(deep);
+  const findings = data?.findings ?? [];
+  const failing = findings.filter((f) => f.status === "failing").length;
+  const warnings = findings.filter((f) => f.status === "warning").length;
+  return (
+    <Card variant="outlined">
+      <CardHeader
+        title={
+          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+            <Typography variant="h6">Doctor</Typography>
+            <Box sx={{ flex: 1 }} />
+            {data && (
+              <Chip
+                size="small"
+                label={
+                  failing > 0
+                    ? `${failing} failing`
+                    : warnings > 0
+                      ? `${warnings} warning${warnings > 1 ? "s" : ""}`
+                      : "Nothing failing"
+                }
+                color={failing > 0 ? "error" : warnings > 0 ? "warning" : "success"}
+                variant={failing > 0 ? "filled" : "outlined"}
+              />
+            )}
+            <Button size="small" variant="outlined" disabled={isFetching} onClick={() => setDeep(true)}>
+              {isFetching ? <CircularProgress size={16} /> : deep ? "Re-run deep checks" : "Run deep checks"}
+            </Button>
+          </Stack>
+        }
+        subheader={
+          <Typography variant="caption" color="text.secondary">
+            The same checks as{" "}
+            <Box component="code" sx={{ fontFamily: "monospace" }}>
+              hz doctor{deep ? " --deep" : ""}
+            </Box>
+            . Read-only: each finding says what to run.
+          </Typography>
+        }
+        sx={{ pb: 0 }}
+      />
+      <CardContent>
+        {error && <Alert severity="error">Doctor failed: {error.message}</Alert>}
+        <DoctorRows findings={findings} />
+      </CardContent>
+    </Card>
+  );
+}
+
+// DependenciesCard lists every command this config requires (autoheal.Check
+// on the server — the same list startup warns from and `homelab-horizon
+// check` prints), so this page cannot disagree with either. A command the
+// config does not need has no row. There is no install button: installing is
+// CLI-only by design, so a missing row carries the command.
+export function DependenciesCard({ health }: { health: SystemHealth }) {
+  const deps = health.dependencies ?? [];
+  const missing = deps.filter((d) => !d.present && !d.optional).length;
+  return (
+    <Card variant="outlined">
+      <CardHeader
+        title={
+          <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+            <Typography variant="h6">Dependencies</Typography>
+            <Box sx={{ flex: 1 }} />
+            <Chip
+              size="small"
+              label={missing > 0 ? `${missing} missing` : "All present"}
+              color={missing > 0 ? "error" : "success"}
+              variant={missing > 0 ? "filled" : "outlined"}
+            />
+          </Stack>
+        }
+        subheader={
+          <Typography variant="caption" color="text.secondary">
+            The commands this configuration needs on this host.
+          </Typography>
+        }
+        sx={{ pb: 0 }}
+      />
+      <CardContent>
+        {deps.map((d) => (
+          <CheckRow
+            key={d.binary}
+            label={`${d.name} (${d.binary}) — ${d.purpose}`}
+            ok={d.present || !!d.optional}
+            okLabel={d.present ? "Installed" : "Optional — not installed"}
+            failingLabel="Missing"
+            runToFix={health.install_hint || INSTALL_DEPS_HINT}
+          />
+        ))}
+      </CardContent>
+    </Card>
+  );
+}
+
 // SystemLevelCard — host-wide bits that don't fit a single component: IP
 // forwarding, horizon's own systemd unit.
+//
+// The unit rows report and do not act. hz will not write the unit file that
+// says who hz runs as, or enable itself at boot, from an HTTP request: a web
+// process that can rewrite its own unit has a one-request path back to
+// User=root (privilege-classification.md §3.1 #6/#7). Both rows carry the
+// command instead, which is what an operator standing at a box that has no
+// unit can actually use — they cannot open this page on it either way.
 function SystemLevelCard({ health }: { health: SystemHealth }) {
   const fixIPF = useFixIPForwarding();
-  const installUnit = useInstallHorizonUnit();
-  const enableHorizon = useEnableHorizon();
 
   return (
     <Card variant="outlined">
@@ -282,19 +481,14 @@ function SystemLevelCard({ health }: { health: SystemHealth }) {
           ok={health.horizon_unit_installed}
           okLabel="Installed"
           failingLabel="Missing"
-          fix={() => installUnit.mutate()}
-          fixRunning={installUnit.isPending}
-          fixLabel="Install unit"
+          runToFix="sudo homelab-horizon install"
         />
         <CheckRow
           label="horizon enabled at boot"
           ok={health.horizon_enabled}
           okLabel="Enabled"
           failingLabel="Disabled"
-          fix={() => enableHorizon.mutate()}
-          fixDisabled={!health.horizon_unit_installed}
-          fixRunning={enableHorizon.isPending}
-          fixLabel="Enable"
+          runToFix="sudo systemctl enable homelab-horizon"
         />
         <CheckRow
           label="horizon currently running"
@@ -310,10 +504,8 @@ function SystemLevelCard({ health }: { health: SystemHealth }) {
 // Fixer buttons share a standard shape: install → create-config → start →
 // enable. Disable downstream fixers when their prereq isn't met so the UI
 // nudges the admin through the right order.
-function WireGuardCard({ health }: { health: SystemHealth }) {
+export function WireGuardCard({ health }: { health: SystemHealth }) {
   const wg = byName(health, "wireguard");
-  const install = useInstallPackage();
-  const createConfig = useCreateWGConfig();
   const fixMasq = useFixMasquerade();
   const fixChain = useFixWGForwardChain();
   const fixRules = useFixWGRules();
@@ -325,17 +517,23 @@ function WireGuardCard({ health }: { health: SystemHealth }) {
       <CheckRow
         label="wg binary installed"
         ok={wg.installed}
-        fix={() => install.mutate("wireguard-tools")}
-        fixRunning={install.isPending}
-        fixLabel="Install"
+        runToFix={INSTALL_DEPS_HINT}
       />
+      {/*
+        No button, and this one is the most deliberate absence on the page.
+        wg0.conf holds the gateway's server private key: writing a new one
+        mints a new server identity and silently invalidates every client
+        config ever handed out — every phone, every laptop, every site-to-site
+        peer — including the tunnel whoever clicked it is probably on. That is
+        not a thing to put one click from a dashboard, and hz was doing it by
+        piping a shell string through systemd-run besides. The verb refuses
+        outright if the file is already there, which a button could not.
+      */}
       <CheckRow
         label="wg0.conf exists"
         ok={wg.config_exists}
-        fix={() => createConfig.mutate()}
-        fixDisabled={!wg.installed}
-        fixRunning={createConfig.isPending}
-        fixLabel="Create config"
+        failingLabel="Missing"
+        runToFix={CREATE_WG_CONFIG_HINT}
       />
       <CheckRow
         label="Interface up"
@@ -388,23 +586,27 @@ function WireGuardCard({ health }: { health: SystemHealth }) {
   );
 }
 
-function HAProxyCard({ health }: { health: SystemHealth }) {
+export function HAProxyCard({ health }: { health: SystemHealth }) {
   const hap = byName(health, "haproxy");
-  const install = useInstallPackage();
-  const fixLogging = useFixHAProxyLogging();
 
   if (!hap) return null;
   const extras = hap.extras ?? {};
-  const loggingOK = Boolean(extras.logging_apparmor_ok) && Boolean(extras.logging_file_exists);
+  // Four states per fact, not two booleans (internal/system/haproxylogging.go):
+  // ok / broken / unknown / not_applicable. The pair this replaced reported
+  // `logging_apparmor_ok: true` whenever hz could not READ the profile, so an
+  // unreadable host and a correct one rendered identically — and unreadable is
+  // the state hz is in the moment it stops running as root.
+  const apparmor = String(extras.logging_apparmor ?? "unknown");
+  const logFile = String(extras.logging_file ?? "unknown");
+  const loggingUnknown = apparmor === "unknown" || logFile === "unknown";
+  const loggingOK = !loggingUnknown && apparmor !== "broken" && logFile !== "broken";
 
   return (
     <ComponentCard title="HAProxy" component={hap}>
       <CheckRow
         label="haproxy binary installed"
         ok={hap.installed}
-        fix={() => install.mutate("haproxy")}
-        fixRunning={install.isPending}
-        fixLabel="Install"
+        runToFix={INSTALL_DEPS_HINT}
       />
       <CheckRow label="Config exists" ok={hap.config_exists} />
       <CheckRow label="Enabled at boot" ok={hap.enabled} okLabel="Enabled" failingLabel="Disabled" />
@@ -412,12 +614,12 @@ function HAProxyCard({ health }: { health: SystemHealth }) {
       <CheckRow
         label="Logging (apparmor attach_disconnected + /var/log/haproxy.log)"
         ok={loggingOK}
-        okLabel="OK"
+        unknown={loggingUnknown}
+        okLabel={apparmor === "not_applicable" ? "OK (rsyslogd unconfined)" : "OK"}
         failingLabel="Broken"
-        fix={() => fixLogging.mutate()}
-        fixDisabled={!hap.installed}
-        fixRunning={fixLogging.isPending}
-        fixLabel="Fix logging"
+        unknownLabel="Cannot tell"
+        runToFix={FIX_HAPROXY_LOGGING_HINT}
+        unknownHint={FIX_HAPROXY_LOGGING_HINT + " --dry-run"}
       />
       {hap.errors && hap.errors.length > 0 && (
         <Alert severity="warning" sx={{ mt: 2 }}>
@@ -436,7 +638,6 @@ function HAProxyCard({ health }: { health: SystemHealth }) {
 
 function DNSMasqCard({ health }: { health: SystemHealth }) {
   const dns = byName(health, "dnsmasq");
-  const install = useInstallPackage();
   const writeConfig = useWriteDNSMasqConfig();
   const reload = useReloadDNSMasq();
   const start = useStartDNSMasq();
@@ -474,9 +675,7 @@ function DNSMasqCard({ health }: { health: SystemHealth }) {
       <CheckRow
         label="dnsmasq binary installed"
         ok={dns.installed}
-        fix={() => install.mutate("dnsmasq")}
-        fixRunning={install.isPending}
-        fixLabel="Install"
+        runToFix={INSTALL_DEPS_HINT}
       />
       <CheckRow
         label="Config exists"
@@ -868,20 +1067,36 @@ function LetsEncryptCard({
   );
 }
 
-// AptInstallCard lists the apt-audit log so the admin can see what's been
-// installed, when, and whether it succeeded. No install button here —
-// per-component cards each have their own install button for the relevant
-// package. This card is read-only history.
+// AptInstallCard lists the apt-audit log — what the old in-UI install button
+// installed, when, and whether it succeeded.
+//
+// Closed record, not a live one. Horizon no longer installs packages over HTTP
+// at all (the remedy is `sudo homelab-horizon install-deps`), so nothing
+// appends here any more. The card stays because the file is the only answer to
+// "was that button ever pressed on this box", and a box provisioned since will
+// simply have none.
 function AptInstallCard() {
   const { data } = useAptAudit();
   const entries = data?.entries ?? [];
   return (
     <Card variant="outlined">
-      <CardHeader title={<Typography variant="h6">apt Install Audit</Typography>} sx={{ pb: 0 }} />
+      <CardHeader
+        title={<Typography variant="h6">apt Install Audit</Typography>}
+        subheader={
+          <Typography variant="caption" color="text.secondary">
+            Historical. Horizon no longer installs packages over HTTP — run{" "}
+            <Box component="code" sx={{ fontFamily: "monospace", userSelect: "all" }}>
+              {INSTALL_DEPS_HINT}
+            </Box>{" "}
+            on the host instead.
+          </Typography>
+        }
+        sx={{ pb: 0 }}
+      />
       <CardContent>
         {entries.length === 0 && (
           <Typography variant="body2" color="text.secondary">
-            No apt installs run from this UI yet.
+            No apt installs were ever run from this UI on this host.
           </Typography>
         )}
         {entries.length > 0 && (
@@ -1147,52 +1362,6 @@ function ConfigCard({
   );
 }
 
-// InstallPackageDialog is currently unused — install buttons on each
-// component card call /install/package directly with a fixed pkg name.
-// Kept as scaffolding for a future "install arbitrary package" admin tool.
-export function InstallPackageDialog({
-  open,
-  packages,
-  onClose,
-}: {
-  open: boolean;
-  packages: string[];
-  onClose: () => void;
-}) {
-  const install = useInstallPackage();
-  const [pkg, setPkg] = useState(packages[0] || "");
-  return (
-    <Dialog open={open} onClose={onClose}>
-      <DialogTitle>Install package</DialogTitle>
-      <DialogContent>
-        <DialogContentText sx={{ mb: 2 }}>
-          apt-get update and install a whitelisted package. The invocation is logged.
-        </DialogContentText>
-        <FormControl fullWidth size="small">
-          <InputLabel>Package</InputLabel>
-          <Select label="Package" value={pkg} onChange={(e) => setPkg(e.target.value)}>
-            {packages.map((p) => (
-              <MenuItem key={p} value={p}>
-                {p}
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
-        <Button
-          variant="contained"
-          onClick={() => install.mutate(pkg)}
-          disabled={install.isPending}
-        >
-          {install.isPending ? <CircularProgress size={16} /> : "Install"}
-        </Button>
-      </DialogActions>
-    </Dialog>
-  );
-}
-
 export function SystemHealthTab({
   publicIP,
   publicIPOverride,
@@ -1258,6 +1427,8 @@ export function SystemHealthTab({
       </Paper>
       <RangeAdvice health={health} />
       <PinnedDNS health={health} />
+      <DoctorCard />
+      <DependenciesCard health={health} />
       <SystemLevelCard health={health} />
       <WireGuardCard health={health} />
       <HAProxyCard health={health} />

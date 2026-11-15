@@ -131,12 +131,12 @@ func (c *Config) DeriveDNSMappings() map[string]string {
 	// derived one is the override case this feature exists for; hz surfaces
 	// the shadowing rather than refusing it (see LocalDNSConflicts).
 	for _, r := range c.LocalDNSRecords {
-		r = r.Normalized()
-		if r.Validate() != nil {
-			slog.Warn("skipping invalid local DNS record", "name", r.Name, "ip", r.IP)
+		resolved, err := c.ResolveLocalDNSRecord(r)
+		if err != nil {
+			slog.Warn("skipping invalid local DNS record", "name", resolved.Name, "ip", r.IP, "err", err)
 			continue
 		}
-		mappings[r.Name] = r.IP
+		mappings[resolved.Name] = resolved.IP
 	}
 
 	return mappings
@@ -150,12 +150,42 @@ func (c *Config) DeriveDNSMappings() map[string]string {
 // already won, which reports no conflicts, ever.
 func (c *Config) deriveServiceDNSMappings() map[string]string {
 	mappings := make(map[string]string)
+	for name, d := range c.deriveServiceDNS() {
+		mappings[name] = d.IP
+	}
+	return mappings
+}
+
+// DerivedDNSName is one name a service makes hz answer, and the service it
+// comes from — the one that wins when several services claim the name.
+type DerivedDNSName struct {
+	IP      string
+	Service string
+}
+
+// deriveServiceDNS is deriveServiceDNSMappings with the owning service kept.
+// The one loop: the address and its owner cannot disagree.
+func (c *Config) deriveServiceDNS() map[string]DerivedDNSName {
+	mappings := make(map[string]DerivedDNSName)
 	for _, svc := range c.Services {
 		if svc.InternalDNS == nil || svc.InternalDNS.IP == "" {
 			continue
 		}
-		ip := svc.InternalDNS.IP
+		// A host reference resolves to the declared address before anything
+		// else looks at it; an unresolvable one drops the mapping rather than
+		// publishing "@nas" as a dnsmasq answer.
+		ip := c.resolveRefOrDrop(svc.InternalDNS.IP, HostRefKindInternalDNS, svc.Name)
+		if ip == "" {
+			continue
+		}
 		// Replace localhost with LocalInterface IP - dnsmasq requires an IP address.
+		//
+		// This rewrite is a SELF-REFERENCE spelled as a magic string, and it
+		// predates references by years. "@self" is the same resolution named
+		// out loud (and it happens above, in the resolve step), so a record
+		// written that way arrives here already an address. The two spellings
+		// are kept because every config written before references uses this
+		// one, and rewriting them would change files nobody asked to change.
 		// Publishing a loopback address into dnsmasq would broadcast it LAN-wide,
 		// making every client resolve the domain to its own 127.0.0.1. If we can't
 		// resolve a real interface IP, skip the mapping rather than leak loopback.
@@ -168,7 +198,7 @@ func (c *Config) deriveServiceDNSMappings() map[string]string {
 			ip = c.LocalInterface
 		}
 		for _, domain := range svc.Domains {
-			mappings[domain] = ip
+			mappings[domain] = DerivedDNSName{IP: ip, Service: svc.Name}
 		}
 	}
 	return mappings
@@ -183,16 +213,23 @@ func (c *Config) deriveServiceDNSMappings() map[string]string {
 func (c *Config) DeriveWildcardDNSNames() map[string]bool {
 	out := map[string]bool{}
 	for _, r := range c.LocalDNSRecords {
-		r = r.Normalized()
-		if r.Wildcard && r.Validate() == nil {
-			out[r.Name] = true
+		resolved, err := c.ResolveLocalDNSRecord(r)
+		if r.Wildcard && err == nil {
+			out[resolved.Name] = true
 		}
 	}
 	return out
 }
 
-// haproxyErrorsDir returns the directory where per-service HAProxy error files are written.
-func (c *Config) haproxyErrorsDir() string {
+// HAProxyErrorsDir returns the directory where HAProxy's error files live:
+// the default errors/503.http that haproxy.RenderError503 produces, and one
+// <service>_503.http per service with a maintenance page.
+//
+// Exported because the agent's desired state has to name the same directory
+// hz writes into — it is the directory the payload CLAIMS, and a claim
+// computed from a second definition of "where the error pages go" would prune
+// the wrong place.
+func (c *Config) HAProxyErrorsDir() string {
 	if c.HAProxyConfigPath != "" {
 		return filepath.Join(filepath.Dir(c.HAProxyConfigPath), "errors")
 	}
@@ -268,7 +305,9 @@ func (c *Config) DeriveHAProxyBackends() []haproxy.Backend {
 		// guarantees these are mutually exclusive.
 		static := svc.Proxy.StaticRoot != ""
 		self := svc.Proxy.Self
-		server := svc.Proxy.Backend
+		// Resolved here, once, so haproxy.cfg carries a literal address — the
+		// same point every other renderer resolves at.
+		server := c.ServiceBackend(&svc)
 		switch {
 		case static:
 			server = c.StaticServeAddr()
@@ -284,10 +323,11 @@ func (c *Config) DeriveHAProxyBackends() []haproxy.Backend {
 			DomainMatches: svc.Domains,
 			Server:        server,
 			InternalOnly:  svc.Proxy.InternalOnly,
-			// A proxy.self service routes to hz's own UI, which is where the
-			// MFA portal lives — so it's the one host an MFA-jailed VPN peer
-			// is allowed through HAProxy to reach.
-			MFAPortal: self,
+			// A service that routes to hz's own UI — proxy.self, or a plain
+			// proxy to hz's listener (RoutesToHZ) — is where the MFA portal
+			// lives, so it's the one host an MFA-jailed VPN peer is allowed
+			// through HAProxy to reach.
+			MFAPortal: c.RoutesToHZ(&svc),
 			// Per-service threshold; zero falls back to the gateway default.
 			RateLimitRequests: svc.Proxy.RateLimitRequests,
 		}
@@ -301,14 +341,15 @@ func (c *Config) DeriveHAProxyBackends() []haproxy.Backend {
 		if !static && !self && svc.Proxy.Deploy != nil {
 			b.Deploy = true
 			b.HTTPCheck = true
-			b.DeployBalance = svc.Proxy.Deploy.Balance
-			b.CurrentServer = svc.Proxy.Deploy.CurrentServer(svc.Proxy.Backend)
-			b.NextServer = svc.Proxy.Deploy.InactiveServer(svc.Proxy.Backend)
+			deploy := c.ResolvedDeploy(&svc)
+			b.DeployBalance = deploy.Balance
+			b.CurrentServer = deploy.CurrentServer(server)
+			b.NextServer = deploy.InactiveServer(server)
 		}
 
 		// Custom 503 maintenance page
 		if svc.Proxy.MaintenancePage != "" {
-			b.ErrorFile503 = filepath.Join(c.haproxyErrorsDir(), haproxy.SanitizeName(svc.Name)+"_503.http")
+			b.ErrorFile503 = filepath.Join(c.HAProxyErrorsDir(), MaintenancePageName(svc.Name))
 		}
 
 		// Protocol to the backend (h2c for gRPC services).
@@ -334,25 +375,73 @@ func (c *Config) DeriveHAProxyBackends() []haproxy.Backend {
 	return backends
 }
 
+// MaintenancePageSuffix is what every per-service maintenance page's file name
+// ends in, and MaintenancePagePattern is the same fact as a file-name glob —
+// which is the form the agent's directory claim takes
+// (internal/agent.Directory).
+//
+// One fact, two spellings derived from it, because they have to agree: the
+// writer below prunes by suffix and the agent prunes by claim, and a
+// maintenance page the claim did not cover would simply never be removed on a
+// box hz no longer writes to.
+const (
+	MaintenancePageSuffix  = "_503.http"
+	MaintenancePagePattern = "*" + MaintenancePageSuffix
+)
+
+// MaintenancePageName is the file name for one service's maintenance page.
+func MaintenancePageName(service string) string {
+	return haproxy.SanitizeName(service) + MaintenancePageSuffix
+}
+
+// MaintenancePage is one per-service 503 page: the file name it goes in,
+// inside the HAProxy errors directory, and the bytes that go in it.
+type MaintenancePage struct {
+	Name     string
+	Contents string
+}
+
+// MaintenancePages renders every per-service maintenance page.
+//
+// PURE — it is the render half, split out so hz's writer and the agent's
+// desired state are built from one renderer rather than two that agree today
+// (the same discipline as haproxy.GenerateConfig, and the reason
+// buildAgentDesired goes through accessors).
+func (c *Config) MaintenancePages() []MaintenancePage {
+	var out []MaintenancePage
+	for _, svc := range c.Services {
+		if svc.Proxy == nil || svc.Proxy.MaintenancePage == "" {
+			continue
+		}
+		out = append(out, MaintenancePage{
+			Name: MaintenancePageName(svc.Name),
+			Contents: "HTTP/1.0 503 Service Unavailable\r\nCache-Control: no-cache\r\n" +
+				"Connection: close\r\nContent-Type: text/html\r\n\r\n" + svc.Proxy.MaintenancePage,
+		})
+	}
+	return out
+}
+
 // WriteMaintenancePageFiles writes per-service 503.http error files for any service
 // with MaintenancePage set, and removes stale files for services where it was cleared.
+//
+// THE PRUNE IS WHY THE AGENT NEEDED A DIRECTORY CONCEPT. A list of files that
+// should exist cannot express "and nothing else with this shape", so moving
+// this function to the agent needed something agent.File does not model.
+// It is served now as a claim on this
+// directory; this writer stays until hz stops writing files at all (item 12
+// step 5), and both work from MaintenancePages above.
 func (c *Config) WriteMaintenancePageFiles() error {
-	errorsDir := c.haproxyErrorsDir()
+	errorsDir := c.HAProxyErrorsDir()
 	if err := os.MkdirAll(errorsDir, 0755); err != nil {
 		return err
 	}
 
 	// Collect active filenames and write them
 	active := make(map[string]bool)
-	for _, svc := range c.Services {
-		if svc.Proxy == nil || svc.Proxy.MaintenancePage == "" {
-			continue
-		}
-		filename := haproxy.SanitizeName(svc.Name) + "_503.http"
-		active[filename] = true
-		path := filepath.Join(errorsDir, filename)
-		content := "HTTP/1.0 503 Service Unavailable\r\nCache-Control: no-cache\r\nConnection: close\r\nContent-Type: text/html\r\n\r\n" + svc.Proxy.MaintenancePage
-		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	for _, page := range c.MaintenancePages() {
+		active[page.Name] = true
+		if err := os.WriteFile(filepath.Join(errorsDir, page.Name), []byte(page.Contents), 0644); err != nil {
 			return err
 		}
 	}
@@ -363,7 +452,7 @@ func (c *Config) WriteMaintenancePageFiles() error {
 		return err
 	}
 	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), "_503.http") && !active[e.Name()] {
+		if strings.HasSuffix(e.Name(), MaintenancePageSuffix) && !active[e.Name()] {
 			_ = os.Remove(filepath.Join(errorsDir, e.Name()))
 		}
 	}
@@ -373,7 +462,33 @@ func (c *Config) WriteMaintenancePageFiles() error {
 // DeriveRoute53Records generates Route53 A records from services with ExternalDNS config.
 // Services with multiple IPs produce multiple records per domain (round-robin DNS).
 func (c *Config) DeriveRoute53Records() []route53.Record {
-	var records []route53.Record
+	records, _ := c.DeriveRoute53Plan()
+	return records
+}
+
+// ExternalDNSSkip is a service domain with external_dns that this hz's own
+// external-DNS sync does not write, and why. It is a statement, not a silence:
+// the caller reports every one.
+type ExternalDNSSkip struct {
+	Service string
+	Name    string
+	// Delegated is true when this is a nested hz and the name is one it hands
+	// to its parent (ParentDNSAsks): the parent publishes it, so not writing
+	// it here is correct, not a failure.
+	Delegated bool
+	Reason    string
+}
+
+// DeriveRoute53Plan is DeriveRoute53Records plus the names it leaves out on
+// purpose. A name is left out when
+//   - this hz is nested and asks its parent to publish the name (no zone here
+//     with a dns_provider holds it), or
+//   - its zone here has no dns_provider, so nothing here can publish it.
+//
+// The second used to be attempted anyway: an AWS CLI call with no hosted zone,
+// which failed every cycle as "DNS sync failed ... failed to update record: "
+// on a child whose name its parent was already publishing (2026-10-08).
+func (c *Config) DeriveRoute53Plan() (records []route53.Record, skipped []ExternalDNSSkip) {
 	for _, svc := range c.Services {
 		if svc.ExternalDNS == nil {
 			continue
@@ -390,15 +505,31 @@ func (c *Config) DeriveRoute53Records() []route53.Record {
 		}
 
 		for _, domain := range svc.Domains {
+			if c.Upstream != nil && !c.selfPublishes(domain) {
+				if ui := c.Upstream.UIName(); ui != "" && strings.EqualFold(strings.TrimSuffix(domain, "."), ui) {
+					skipped = append(skipped, ExternalDNSSkip{Service: svc.Name, Name: domain,
+						Reason: "this is this hz's VPN-only UI name: it is neither published here nor asked of the parent; remove external_dns from service " + svc.Name})
+					continue
+				}
+				skipped = append(skipped, ExternalDNSSkip{Service: svc.Name, Name: domain, Delegated: true,
+					Reason: "nested hz: no zone here with a DNS provider holds this name, so it is asked of the parent, which publishes it"})
+				continue
+			}
 			zone := c.GetZoneForDomain(domain)
 			if zone == nil {
 				continue // No zone configured for this domain
 			}
-
-			awsProfile := ""
-			if provider := zone.GetDNSProvider(); provider != nil {
-				awsProfile = provider.AWSProfile
+			// Only a zone's dns_provider writes it. A zone_id alone was the
+			// legacy shape the AWS CLI wrote with ambient credentials; that
+			// path is gone (2026-10-30), so hz needs no aws binary, and the
+			// shape is reported here, never attempted.
+			provider := zone.GetDNSProvider()
+			if provider == nil {
+				skipped = append(skipped, ExternalDNSSkip{Service: svc.Name, Name: domain,
+					Reason: fmt.Sprintf("zone %s has no dns_provider, so nothing here publishes %s; add a provider to the zone or remove external_dns from service %s", zone.Name, domain, svc.Name)})
+				continue
 			}
+			awsProfile := provider.AWSProfile
 			for _, ip := range publicIPs {
 				records = append(records, route53.Record{
 					Name:       domain,
@@ -412,7 +543,17 @@ func (c *Config) DeriveRoute53Records() []route53.Record {
 			}
 		}
 	}
-	return records
+	return records, skipped
+}
+
+// selfPublishes reports whether a zone here with a DNS provider holds name, so
+// this hz publishes it itself. Its complement is exactly what a nested hz asks
+// its parent for (ParentDNSAsks); both read this one predicate so they cannot
+// disagree about who publishes a name.
+func (c *Config) selfPublishes(name string) bool {
+	n := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(name), "."))
+	z := c.owningZone(strings.TrimPrefix(n, "*."))
+	return z != nil && z.GetDNSProvider() != nil
 }
 
 // filterRedundantDomains removes non-wildcard domains that are already covered
@@ -465,82 +606,75 @@ func filterRedundantDomains(domains []string) []string {
 func (c *Config) DeriveSSLDomains() []letsencrypt.DomainConfig {
 	var domains []letsencrypt.DomainConfig
 	for i := range c.Zones {
-		zone := &c.Zones[i]
-		if zone.SSL == nil || !zone.SSL.Enabled {
-			continue
+		if d, ok := zoneSSLDomain(&c.Zones[i]); ok {
+			domains = append(domains, d)
 		}
-
-		// Skip if no SubZones specified - only request what's explicitly configured
-		if len(zone.SubZones) == 0 {
-			continue
-		}
-
-		// Build domain list from sub-zones
-		// Empty string "" means root domain, "*" means root wildcard, otherwise append to zone name
-		var allDomains []string
-		for _, subZone := range zone.SubZones {
-			switch subZone {
-			case "":
-				allDomains = append(allDomains, zone.Name)
-			case "*":
-				allDomains = append(allDomains, "*."+zone.Name)
-			default:
-				allDomains = append(allDomains, subZone+"."+zone.Name)
-			}
-		}
-
-		// Filter out non-wildcard domains that are redundant with a wildcard
-		// in the same request. E.g., if *.example.net is present, remove
-		// dev.example.net — Let's Encrypt rejects this as malformed.
-		allDomains = filterRedundantDomains(allDomains)
-
-		if len(allDomains) == 0 {
-			continue
-		}
-
-		// First domain is primary, rest are extra SANs
-		primaryDomain := allDomains[0]
-		var extraSANs []string
-		if len(allDomains) > 1 {
-			extraSANs = allDomains[1:]
-		}
-
-		// Build DNS provider config for letsencrypt
-		var dnsProvider *letsencrypt.DNSProviderConfig
-		if providerCfg := zone.GetDNSProvider(); providerCfg != nil {
-			// Use provider's AWSHostedZoneID if set, otherwise fall back to zone's ZoneID
-			awsHostedZoneID := providerCfg.AWSHostedZoneID
-			if awsHostedZoneID == "" && providerCfg.Type == "route53" {
-				awsHostedZoneID = zone.ZoneID
-			}
-			// Same for Cloudflare
-			cloudflareZoneID := providerCfg.CloudflareZoneID
-			if cloudflareZoneID == "" && providerCfg.Type == "cloudflare" {
-				cloudflareZoneID = zone.ZoneID
-			}
-
-			dnsProvider = &letsencrypt.DNSProviderConfig{
-				Type:               letsencrypt.DNSProviderType(providerCfg.Type),
-				AWSAccessKeyID:     providerCfg.AWSAccessKeyID,
-				AWSSecretAccessKey: providerCfg.AWSSecretAccessKey,
-				AWSRegion:          providerCfg.AWSRegion,
-				AWSHostedZoneID:    awsHostedZoneID,
-				AWSProfile:         providerCfg.AWSProfile,
-				NamecomUsername:    providerCfg.NamecomUsername,
-				NamecomAPIToken:    providerCfg.NamecomAPIToken,
-				CloudflareAPIToken: providerCfg.CloudflareAPIToken,
-				CloudflareZoneID:   cloudflareZoneID,
-			}
-		}
-
-		domains = append(domains, letsencrypt.DomainConfig{
-			Domain:      primaryDomain,
-			ExtraSANs:   extraSANs,
-			Email:       zone.SSL.Email,
-			DNSProvider: dnsProvider,
-		})
 	}
 	return domains
+}
+
+// ZoneSSLDomain is the certificate request the renewal sweep makes for one
+// zone, by name. ok is false for an unknown zone, one without SSL, or one
+// whose sub_zones name nothing.
+func (c *Config) ZoneSSLDomain(name string) (letsencrypt.DomainConfig, bool) {
+	zone := c.GetZone(name)
+	if zone == nil {
+		return letsencrypt.DomainConfig{}, false
+	}
+	return zoneSSLDomain(zone)
+}
+
+// zoneSSLDomain is one zone's certificate request (see DeriveSSLDomains).
+func zoneSSLDomain(zone *Zone) (letsencrypt.DomainConfig, bool) {
+	if zone.SSL == nil || !zone.SSL.Enabled {
+		return letsencrypt.DomainConfig{}, false
+	}
+
+	// Skip if no SubZones specified - only request what's explicitly configured
+	if len(zone.SubZones) == 0 {
+		return letsencrypt.DomainConfig{}, false
+	}
+
+	// Build domain list from sub-zones
+	// Empty string "" means root domain, "*" means root wildcard, otherwise append to zone name
+	var allDomains []string
+	for _, subZone := range zone.SubZones {
+		switch subZone {
+		case "":
+			allDomains = append(allDomains, zone.Name)
+		case "*":
+			allDomains = append(allDomains, "*."+zone.Name)
+		default:
+			allDomains = append(allDomains, subZone+"."+zone.Name)
+		}
+	}
+
+	// Filter out non-wildcard domains that are redundant with a wildcard
+	// in the same request. E.g., if *.example.net is present, remove
+	// dev.example.net — Let's Encrypt rejects this as malformed.
+	allDomains = filterRedundantDomains(allDomains)
+
+	if len(allDomains) == 0 {
+		return letsencrypt.DomainConfig{}, false
+	}
+
+	// First domain is primary, rest are extra SANs
+	primaryDomain := allDomains[0]
+	var extraSANs []string
+	if len(allDomains) > 1 {
+		extraSANs = allDomains[1:]
+	}
+
+	// Build DNS provider config for letsencrypt (zone id filled in from
+	// the zone when the provider leaves it empty).
+	dnsProvider := zoneLEProvider(zone)
+
+	return letsencrypt.DomainConfig{
+		Domain:      primaryDomain,
+		ExtraSANs:   extraSANs,
+		Email:       zone.SSL.Email,
+		DNSProvider: dnsProvider,
+	}, true
 }
 
 // HostPortEntry represents a single port reservation on a host
@@ -552,6 +686,11 @@ type HostPortEntry struct {
 	// Forward marks a reservation made by a layer-4 port forward (the public
 	// port on the gateway, or the backend it points at).
 	Forward bool `json:"forward,omitempty"`
+	// Project is the owning service's Project, copied in at derive time — the
+	// map is rebuilt on every read, so this is a view, never a stored second
+	// answer. "" for infra (haproxy, wireguard, dnsmasq, hz) and for a service
+	// with no project. Allocation ignores it.
+	Project string `json:"project,omitempty"`
 }
 
 // HostPortMap represents all port reservations grouped by host IP
@@ -573,7 +712,7 @@ func (c *Config) DeriveHostPortMap() HostPortMap {
 		if svc.Proxy == nil || svc.Proxy.Backend == "" {
 			continue
 		}
-		host, port, err := net.SplitHostPort(svc.Proxy.Backend)
+		host, port, err := net.SplitHostPort(c.ServiceBackend(&svc))
 		if err != nil {
 			continue
 		}
@@ -590,13 +729,14 @@ func (c *Config) DeriveHostPortMap() HostPortMap {
 			Proto:   "tcp",
 			Service: svc.Name,
 			Domain:  svc.PrimaryDomain(),
+			Project: svc.Project,
 		})
 
 		// Blue-green deploy reserves a second "next" backend port for the
 		// standby release — it's in use even when the service points at the
 		// active one, so allocation must not hand it out.
 		if svc.Proxy.Deploy != nil && svc.Proxy.Deploy.NextBackend != "" {
-			if nh, np, err := net.SplitHostPort(svc.Proxy.Deploy.NextBackend); err == nil {
+			if nh, np, err := net.SplitHostPort(c.ServiceNextBackend(&svc)); err == nil {
 				if nh == "localhost" || nh == "127.0.0.1" {
 					if c.LocalInterface != "" {
 						nh = c.LocalInterface
@@ -609,6 +749,7 @@ func (c *Config) DeriveHostPortMap() HostPortMap {
 					Proto:   "tcp",
 					Service: svc.Name + " (deploy-next)",
 					Domain:  svc.PrimaryDomain(),
+					Project: svc.Project,
 				})
 			}
 		}
@@ -630,14 +771,18 @@ func (c *Config) DeriveHostPortMap() HostPortMap {
 				Service: svc.Name + " (forward)",
 				Domain:  svc.PrimaryDomain(),
 				Forward: true,
+				Project: svc.Project,
 			})
-			if bh, bp, err := net.SplitHostPort(f.Backend); err == nil {
+			// The gateway half above is reserved whatever the backend says; only
+			// the target half needs an address, so only it resolves.
+			if bh, bp, err := net.SplitHostPort(c.resolveRefOrDrop(f.Backend, HostRefKindForward, svc.Name)); err == nil {
 				m[bh] = append(m[bh], HostPortEntry{
 					Port:    bp,
 					Proto:   f.Proto,
 					Service: svc.Name + " (forward target)",
 					Domain:  svc.PrimaryDomain(),
 					Forward: true,
+					Project: svc.Project,
 				})
 			}
 		}
@@ -743,6 +888,12 @@ func (c *Config) scrapeExcluder() func(string) bool {
 			if _, n, err := net.ParseCIDR(e); err == nil {
 				nets = append(nets, n)
 			}
+			continue
+		}
+		// An exclusion names a machine, so "@nas" is the natural way to write
+		// one: it keeps excluding the same box after the box moves. A CIDR is
+		// a range rather than a host and takes no reference.
+		if e = c.resolveRefOrDrop(e, HostRefKindScrapeExclusion, ""); e == "" {
 			continue
 		}
 		exact[e] = true
@@ -898,7 +1049,9 @@ func (c *Config) DeriveExporterTargets() []ExporterTarget {
 		switch e.EffectiveMode() {
 		case "static":
 			for _, t := range e.Targets {
-				emitOnce(strings.TrimSpace(t), nil)
+				// A static target may be written "@nas:9100"; the scrape
+				// config carries the address it resolves to.
+				emitOnce(c.resolveRefOrDrop(strings.TrimSpace(t), HostRefKindExporterTarget, e.Job), nil)
 			}
 
 		case "service":
@@ -908,11 +1061,11 @@ func (c *Config) DeriveExporterTargets() []ExporterTarget {
 					continue
 				}
 				if svc.Proxy.Deploy != nil && svc.Proxy.Deploy.NextBackend != "" {
-					emitOnce(svc.Proxy.Backend, map[string]string{"service": svc.Name, "slot": "current"})
-					emitOnce(svc.Proxy.Deploy.NextBackend, map[string]string{"service": svc.Name, "slot": "next"})
+					emitOnce(c.ServiceBackend(svc), map[string]string{"service": svc.Name, "slot": "current"})
+					emitOnce(c.ServiceNextBackend(svc), map[string]string{"service": svc.Name, "slot": "next"})
 					continue
 				}
-				emitOnce(svc.Proxy.Backend, map[string]string{"service": svc.Name})
+				emitOnce(c.ServiceBackend(svc), map[string]string{"service": svc.Name})
 			}
 
 		default: // "port"
@@ -932,8 +1085,27 @@ func (c *Config) DeriveExporterTargets() []ExporterTarget {
 					if ip == "*" {
 						continue
 					}
-					if resolved, ok := ipByName[ip]; ok {
+					// Two spellings reach the same place. The bare name is the
+					// original, port-mode-only resolution and stays for
+					// compatibility; "@name" is the sigil form every other
+					// consumer takes, accepted here so one syntax works
+					// everywhere.
+					//
+					// Resolution goes through ResolveHostRef rather than the
+					// local ipByName map, which is built from c.Hosts alone and
+					// therefore has no entry for "self": "@self" here used to
+					// resolve to "" and the target was dropped without a word,
+					// while the same address written literally produced a
+					// target. That is a rendered difference between two
+					// spellings that must mean the same thing, and it is the
+					// one field kind `hz host adopt` could not have rewritten.
+					if name := HostRefName(ip); name != "" {
+						ip = c.resolveRefOrDrop(ip, HostRefKindExporterHost, e.Job)
+					} else if resolved, ok := ipByName[ip]; ok {
 						ip = resolved
+					}
+					if ip == "" {
+						continue
 					}
 					emitOnce(net.JoinHostPort(ip, strconv.Itoa(e.Port)), nil)
 				}
@@ -1036,11 +1208,18 @@ func (c *Config) ValidateService(svc *Service) error {
 		if zone == nil {
 			return &ValidationError{Field: "domain", Message: fmt.Sprintf("no zone configured for domain %q", domain)}
 		}
+		if err := c.ServiceDomainDelegationError(svc.Name, domain); err != nil {
+			return &ValidationError{Field: "domain", Message: err.Error()}
+		}
 	}
 
-	// Validate InternalDNS if present
+	// Validate InternalDNS if present. A host reference resolves first, so the
+	// address check below runs on what dnsmasq will actually answer with.
 	if svc.InternalDNS != nil && svc.InternalDNS.IP != "" {
-		ip := svc.InternalDNS.IP
+		ip, err := c.ResolveHostRef(svc.InternalDNS.IP)
+		if err != nil {
+			return hostRefError("internal_dns.ip", err)
+		}
 		// Allow localhost or valid IP
 		if ip != "localhost" && ip != "127.0.0.1" {
 			if net.ParseIP(ip) == nil {
@@ -1051,9 +1230,27 @@ func (c *Config) ValidateService(svc *Service) error {
 
 	// Validate Proxy backend address format if present
 	if svc.Proxy != nil && svc.Proxy.Backend != "" {
-		_, _, err := net.SplitHostPort(svc.Proxy.Backend)
+		backend, err := c.ResolveHostRef(svc.Proxy.Backend)
 		if err != nil {
+			return hostRefError("proxy.backend", err)
+		}
+		if _, _, err := net.SplitHostPort(backend); err != nil {
 			return &ValidationError{Field: "proxy.backend", Message: "invalid address format (expected host:port)"}
+		}
+	}
+
+	// The standby slot had NO validator at all until host references arrived:
+	// a next_backend was accepted in any shape and only failed later, in the
+	// generated haproxy.cfg. It gets the same two checks slot A has, for the
+	// same reason — a reference must resolve, and the result must be an
+	// address HAProxy can write into a `server` line.
+	if svc.Proxy != nil && svc.Proxy.Deploy != nil && svc.Proxy.Deploy.NextBackend != "" {
+		next, err := c.ResolveHostRef(svc.Proxy.Deploy.NextBackend)
+		if err != nil {
+			return hostRefError("proxy.deploy.next_backend", err)
+		}
+		if _, _, err := net.SplitHostPort(next); err != nil {
+			return &ValidationError{Field: "proxy.deploy.next_backend", Message: "invalid address format (expected host:port)"}
 		}
 	}
 
@@ -1104,10 +1301,11 @@ func (c *Config) ValidateService(svc *Service) error {
 	// Backend protocol: only a value hz knows, and only where there is a real
 	// backend. HAProxy speaks h2c by prior knowledge with no fallback, so a
 	// typo here would silently mean HTTP/1.1 and a static or self service
-	// pointed at hz's own HTTP/1.1 servers would simply break.
+	// pointed at hz's own HTTP/1.1 servers would simply break; the same holds
+	// for https against hz's own plain-HTTP listeners.
 	if svc.Proxy != nil && svc.Proxy.BackendProto != "" {
 		if !ValidBackendProto(svc.Proxy.BackendProto) {
-			return &ValidationError{Field: "proxy.backend_proto", Message: `unknown protocol (use "h2" or leave empty for HTTP/1.1)`}
+			return &ValidationError{Field: "proxy.backend_proto", Message: `unknown protocol (use "h2", "https", or leave empty for HTTP/1.1)`}
 		}
 		if svc.Proxy.Backend == "" && svc.Proxy.Deploy == nil {
 			return &ValidationError{Field: "proxy.backend_proto", Message: "backend_proto needs a backend (not valid for static or self services)"}
@@ -1377,25 +1575,58 @@ func (c *Config) DeriveDNSRecords() []dnsmasq.Record {
 	wildcards := c.DeriveWildcardDNSNames()
 	local := map[string]bool{}
 	for _, r := range c.LocalDNSRecords {
-		r = r.Normalized()
-		if r.Validate() != nil {
+		resolved, err := c.ResolveLocalDNSRecord(r)
+		if err != nil {
 			continue
 		}
-		local[r.Name] = true
-		comments[r.Name] = r.Comment
+		local[resolved.Name] = true
+		comments[resolved.Name] = resolved.Comment
 	}
 
 	mappings := c.DeriveDNSMappings()
 	records := make([]dnsmasq.Record, 0, len(mappings))
+	wild := map[string]bool{}
 	for name, ip := range mappings {
+		// A derived service domain is a wildcard; an operator record is
+		// one only if it says so.
+		w := !local[name] || wildcards[name]
+		if w {
+			wild[strings.ToLower(name)] = true
+		}
 		records = append(records, dnsmasq.Record{
-			Name: name,
-			IP:   ip,
-			// A derived service domain is a wildcard; an operator record is
-			// one only if it says so.
-			Wildcard: !local[name] || wildcards[name],
+			Name:     name,
+			IP:       ip,
+			Wildcard: w,
 			Comment:  comments[name],
 		})
+	}
+	forwarded := map[string]bool{}
+	// A delegated subdomain is not this hz's to answer. A service domain above
+	// it is a wildcard address= that would answer for it too — measured on the
+	// office hz: address=/redline.iodesystems.com/192.168.1.160 answered .160
+	// for loadtest.redline.iodesystems.com. Forwarding it upstream gives
+	// internal clients the delegated zone's public answer.
+	for i := range c.Zones {
+		for _, d := range c.Zones[i].Delegations() {
+			if d.Name == strings.ToLower(c.Zones[i].Name) {
+				continue // refused by validation; never forward a whole zone away
+			}
+			forwarded[d.Name] = true
+			records = append(records, dnsmasq.Record{
+				Name:            d.Name,
+				ForwardUpstream: true,
+				Comment:         d.describe() + "; resolved upstream, not answered here",
+			})
+		}
+	}
+	// The same carve-out for a name declared here as pointing ELSEWHERE — a
+	// zone record to another address, or an hz instance's own domain — which
+	// is not a delegation, so the loop above does not see it
+	// (externalNameForwards).
+	for _, r := range c.externalNameForwards(mappings, wild) {
+		if !forwarded[r.Name] {
+			records = append(records, r)
+		}
 	}
 	return records
 }
@@ -1404,4 +1635,73 @@ func (c *Config) DeriveDNSRecords() []dnsmasq.Record {
 // which shows them beside the operator's own records.
 func (c *Config) DeriveDNSRecordsDerivedOnly() map[string]string {
 	return c.deriveServiceDNSMappings()
+}
+
+// DeriveDNSNamesByService is DeriveDNSRecordsDerivedOnly with each name's
+// owning service.
+func (c *Config) DeriveDNSNamesByService() map[string]DerivedDNSName {
+	return c.deriveServiceDNS()
+}
+
+// ServicePort is one port a service uses, and what uses it.
+type ServicePort struct {
+	Port int
+	// Label is "backend", "slot a (current)", "slot b (next)" (blue-green;
+	// the role follows active_slot), "http" or "https" (HAProxy, in front of a
+	// proxied service). No slot is marked active: under next-first, which one
+	// serves is HAProxy's live answer, not a config field.
+	Label string
+}
+
+// ServicePorts lists the ports a service uses: its backend port, both
+// blue-green slots when it has proxy.deploy, and HAProxy's ports when it is
+// proxied. Derived from the config on each call; nil for a service that uses
+// none. A backend that does not parse as host:port contributes nothing.
+func (c *Config) ServicePorts(svc *Service) []ServicePort {
+	if svc == nil || svc.Proxy == nil {
+		return nil
+	}
+	var out []ServicePort
+	backendPort := func(addr string) int {
+		_, p, err := net.SplitHostPort(addr)
+		if err != nil {
+			return 0
+		}
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			return 0
+		}
+		return n
+	}
+	if d := c.ResolvedDeploy(svc); d != nil && svc.Proxy.Backend != "" {
+		if p := backendPort(c.ServiceBackend(svc)); p > 0 {
+			out = append(out, ServicePort{Port: p, Label: "slot a (" + slotRole(d.ActiveSlot != "b") + ")"})
+		}
+		if p := backendPort(d.NextBackend); p > 0 {
+			out = append(out, ServicePort{Port: p, Label: "slot b (" + slotRole(d.ActiveSlot == "b") + ")"})
+		}
+	} else if p := backendPort(c.ServiceBackend(svc)); p > 0 {
+		out = append(out, ServicePort{Port: p, Label: "backend"})
+	}
+	httpPort, httpsPort := c.HAProxyHTTPPort, c.HAProxyHTTPSPort
+	if httpPort == 0 {
+		httpPort = 80
+	}
+	if httpsPort == 0 {
+		httpsPort = 443
+	}
+	out = append(out, ServicePort{Port: httpPort, Label: "http"})
+	if c.SSLEnabled {
+		out = append(out, ServicePort{Port: httpsPort, Label: "https"})
+	}
+	return out
+}
+
+// slotRole is a blue-green slot's role: "current" for the slot active_slot
+// names, "next" for the other.
+func slotRole(current bool) string {
+	if current {
+		return "current"
+	}
+	return "next"
 }

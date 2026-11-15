@@ -15,11 +15,20 @@ import SyncProvider from "../components/SyncProvider";
 // caller by WireGuard source IP server-side, and refuses anyone who is not a
 // known peer. It renders chrome-free for the same reason: a jailed peer can't
 // reach anything the nav would link to.
+//
+// The VPN invite page (/invite/<token>) is public for the same reason: the
+// invitee is not on the VPN and has no account. Its two calls authenticate by
+// the invite token, on the kiosk vhost only.
 const PUBLIC_ROUTES = ["/mfa"];
+const PUBLIC_PREFIXES = ["/invite/"];
+
+export function isPublicRoute(pathname: string): boolean {
+  return PUBLIC_ROUTES.includes(pathname) || PUBLIC_PREFIXES.some((p) => pathname.startsWith(p));
+}
 
 function RootComponent() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const isPublic = PUBLIC_ROUTES.includes(pathname);
+  const isPublic = isPublicRoute(pathname);
   const { data, isLoading, isError } = useAuthStatus();
 
   if (isPublic) {

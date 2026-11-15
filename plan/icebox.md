@@ -10,6 +10,12 @@ How this plan works: see `/home/nthalk/CLAUDE.md` "Planning". These are queued, 
 - ✅ **Hosts UX clarity** — Observability Hosts section now lists knownHosts (derived ∪ declared) with a
   source badge and a one-click "Declare / add labels" (prefills IP) on derived hosts.
 
+## ✅ SECURITY — peer-API access control (fixed 2026-09-21)
+
+Closed on `fix/peer-api-access`: an empty peer list now admits nobody. Full
+write-up, including what else that surface hands out and whether the cert
+channel should exist at all, in `plan/design/ha-and-the-agent.md` §9-§10.
+
 ## ◻ Read-only access, if it is ever wanted
 
 Removed as a role in `0003_drop_viewer_role` because nothing enforced it and a
@@ -49,7 +55,7 @@ hands out non-conflicting listener ports.
 **Why it beats the alternatives.** No NAT, no third DNS view, and unlike
 renumbering it does not need physical access or a maintenance window. It also
 removes the need for the `/32` host routes recorded in
-[plan.md](plan.md#decision-remote-access-uses-host-routes-not-a-renumber-2026-09-10).
+[done.md](done.md#decision-remote-access-uses-host-routes-not-a-renumber-2026-09-10).
 
 **risks:** a TCP frontend is a hole with no Host header to route on, so each
 one is a port that reaches exactly one backend and needs `internal_only`
@@ -61,7 +67,7 @@ this is opt-in rather than pending.
 
 ## ◻ Replicated state for HA, instead of a JSON pull and a per-instance sqlite
 
-Surfaced 2026-09-18 while scoping the [config manager](config-manager.md), which
+Surfaced 2026-09-18 while scoping the [config manager](design/config-manager.md), which
 needs registration and approval state to survive a failover and found nothing to
 put it in.
 
@@ -225,6 +231,31 @@ the VPN page's add-peer flow.
 only for the profile that installs the LAN route, which is `lan-access` —
 `vpn-only` and `full-tunnel` are unaffected.
 
+## ◻ Canary rollout across nodes: internal + N%, then 50%, then the rest
+
+Owner, 2026-10-29, after next-first went live: *"at scale, that may be a node that is internal + % of population - the right way to go is have two hz instances, deploy next on it, and route internal + canary %, things look good, canary to 50 and the other node gets upgrade"*. This is what replaces "verify before traffic" once there is more than one box. Today next-first serves the candidate as soon as its check passes, so it is verified by traffic.
+
+The steps: upgrade node B → route internal users + N% to B → watch → 50% → upgrade node A → 100%.
+
+What exists (checked 2026-10-29):
+- `balance first|roundrobin` per deploy backend (`internal/haproxy/render.go:634`), roundrobin with equal weights only;
+- `internal_only` / `local_access` as a source ACL (deny only — it does not pick a backend);
+- two slots of ONE address set.
+
+Missing:
+1. **A split declaration: one hostname, two SERVICES** (owner, 2026-10-29: *"two separate services (perhaps on different boxes)"*): `{domain, stable: <service>, canary: <service>, cookie, percent}`. Each service keeps its own backend, slots, checks and box, so no backend set larger than two is needed. Today a domain belongs to exactly one service (`internal/config/derive.go:1454` refuses a second), so the split must own the domain itself, not two services both claiming it. Render: `use_backend <canary> if bucket_lt_N { nbsrv(<canary>_backend) gt 0 }`, else stable. A canary with no server up falls back to stable instead of answering 503.
+2. **The percentage is declared config**, not a runtime `set weight`: HAProxy runtime state does not survive a reload (#5, the same trap as runtime slot states). Moving N is a config edit plus a reload.
+3. **Routing by source:** `use_backend <canary> if local_access` before the weighted split, so internal users always land on the candidate.
+4. **Stickiness:** a cookie or source hash, so one user does not bounce between builds mid-session.
+4a. **Shape the owner suggested (2026-10-29): a cookie name + a percentage, where the cookie value must be a natural number.** The value is a bucket, `0..99`. A request goes to the canary when `bucket < N`.
+   - **Why this shape:** it gives stickiness for free (#4). It is also monotonic: raising N from 10 to 50 keeps everyone already on the canary there and only adds users, so nobody flips back.
+   - **Assignment:** if the cookie is absent or not a natural number, hz picks `rand(100)` and sets the cookie on the response. "Not a natural number" is a refusal, never a coercion: `abc`, `-1`, `1e2`, `007`, ` 5` and `100+` are re-bucketed, not read as 0. A coerced 0 would put every malformed cookie on the canary (#2: empty ≠ unknown).
+   - **Internal users:** route on source before the bucket, or pin by issuing bucket 0.
+   - **Assumption:** HAProxy's `req.cook(<name>)` with a regex match `^(0|[1-9][0-9]?)$` before the `int` compare. The `int` converter alone would also accept a leading `+`/`-`; this is unverified against the HAProxy docs, so check before building.
+5. **Mixed-version safety:** both builds serve at once for a whole stage. Schema and API must be backward-compatible across one version; that is the app's contract, and hz cannot check it.
+
+Settled (owner, 2026-10-29): two separate hz **services**, possibly on different boxes, behind one hz edge. It is not two hz edges. Rollout: upgrade the canary service → N% (+ internal) → 50% → upgrade the stable service → 100%, or swap the roles in the split.
+
 ## ◻ Path routing for a service (one hostname, two backends)
 
 **Resume condition:** something needs two backends under one name. The first
@@ -257,7 +288,7 @@ it once by source-IP identity, the row is deleted. Driver was
 configure npm, maven, docker, go, apt and brew.
 
 **Retired, not shipped and not rejected.** The
-[config manager](config-manager.md) covers the need with better properties, as
+[config manager](design/config-manager.md) covers the need with better properties, as
 *machine-scoped secrets*: encrypted to the keypair the machine generates at
 registration, so hz holds ciphertext it cannot read, revocation is per-device,
 and the value survives a lost response instead of being gone. The reasoning,
@@ -325,6 +356,661 @@ an admin. Below that, this feature buys one less paste and costs a new hz
 feature, a plaintext token at rest in hz's database, and an interaction with
 the MFA jail.
 
-## ✅ Moved to active 2026-09-18 — hz-client becomes a library
+## ◻ hz-client becomes a library
 
-Scoped, then promoted the same day. See [plan.md](plan.md), item 10.
+**Back in the icebox 2026-09-24**, where it was between 2026-09-18 and today.
+Its own last line always said *"Not scheduled. Scoped so the size is known, not
+because it is next."* The version surface — step 1, and the only part that was
+ever urgent — **landed 2026-09-18** and is described below; the rest is
+excluded from this release.
+
+**Resume condition:** redline-ops wants to stop `curl`-ing a bash script, or a
+second non-bash consumer appears. Waits on nobody's capacity — it is a scope
+decision.
+
+**Driver:** redline-ops manages its own config by `curl`-ing `bin/hz-client`,
+`chmod +x`, and `fork/exec`. Now that [the config manager](design/config-manager.md)
+has shipped a working importable package, the same shape should cover the rest.
+
+#### What it is today
+
+632 lines of bash, copied **verbatim** into a Go raw string literal
+(`internal/server/hz_client_script.go`) with a test whose only job is noticing
+when the two copies drift. Served unauthenticated from `/admin/haproxy/hz-client`
+— fine, it holds no secret, though the handler's comment claiming
+`backupAuthMiddleware` guards it is stale and should not be believed.
+
+**There are no consumers in this repo.** It appears only as copy-paste text in
+`README.md` and the Service Integration dialog. The real consumer is redline-ops,
+in another repo — which means **this can be migrated incrementally**: redline
+adopts the library while the script keeps working, and the drift test keeps the
+script honest meanwhile. No big bang.
+
+**The business logic is already in Go, server-side.** `internal/sitedeploy` does
+tar extraction, path-traversal defence, size caps, atomic symlink swap and
+release pruning; `internal/haproxy` does the socket commands. The script is a
+thin HTTP-plus-orchestration wrapper. Porting is mostly wire calls, not logic.
+
+#### The evidence that this is not cosmetic
+
+`hz-client bans` has **never** printed a timestamp. The server marshals
+`createdAt`/`expiresAt` (`internal/apitypes/types.go:969-976`); the script reads
+`created_at`/`expires_at` (`bin/hz-client:529-530`). Every ban prints
+`created=-  expires=never`.
+
+That is a JSON contract drifting silently **inside one repository**, past a
+review, past a drift test that only compares the script to its own copy. It is
+the whole argument in one bug: a typed client would not have compiled.
+
+#### The blocking problem: there is no version surface at all
+
+Grepped the script and every relevant wire struct. **Zero version fields, zero
+`X-*-Version` headers, nothing negotiated.** A downloaded script always matches
+the server; a linked library is pinned at build time, and today it would have no
+signal that it had skewed.
+
+**This is the first slice, and it is worth landing whether or not the library
+happens** — the bans bug is what unnoticed drift looks like with the *current*
+model, and pinning consumers makes it worse rather than better. Shape: the
+server declares an API version and a minimum it still serves; the client sends
+what it was built against; a mismatch is a named error naming both numbers, not
+a 400 with a guess.
+
+#### Verb inventory
+
+**Trivial — a typed HTTP call, logic already server-side:** `status`,
+`current|next up|drain|down`, `swap`, `ban`, `unban`, `bans` (fix the casing bug
+while there), `maint-page set|clear`, `site rollback`, `site releases`.
+
+**Substantial — design, not translation:**
+
+- **`promote` and `rolling status|start|continue|finalize`.** The rolling *phase*
+  is inferred client-side from two polled state strings; **the server holds no
+  phase state at all**, so a library must reproduce that state machine exactly
+  rather than call something. And both poll for up to `--timeout` seconds while
+  printing lines a human watches — a library needs a progress callback, not
+  `fmt.Println`, which is an API decision.
+- **`site push`.** Needs in-process tar streaming (`archive/tar` +
+  `compress/gzip`, replacing a shell-out to `tar`) and a decision about the
+  can't-rewind-a-pipe behaviour the script deliberately relies on.
+
+**Do NOT port as-is:**
+
+- **The OTP preflight** is a no-op for the token type this tool actually uses. It
+  inspects `/api/v1/auth/status` for `otpRequired`, but that route only examines
+  a bearer token with the `hz_pat_` prefix — a service/deploy token never
+  matches, so it fires only when an operator misuses a personal token as
+  `HZ_TOKEN`. A real 401 from the real endpoint says the same thing.
+- **The http→https redirect trap** defends against curl dropping `Authorization`
+  across a scheme change. Go's client strips sensitive headers on a **host**
+  change, not a scheme change, so this must be **re-derived from Go's actual
+  redirect semantics**, not copied. Getting this wrong silently leaks a token or
+  silently 401s.
+
+#### What porting deletes
+
+The `python3` dependency (JSON build, parse and pretty-print in every verb), the
+shell-out to `tar`, the `HZ_TOP_PID`/`trap` workaround for `set -e` not crossing
+command substitution, and the drift test — because there stops being a second
+copy.
+
+#### The honest cost
+
+A downloaded script always matches the server. A linked library is pinned at
+build time, so an hz upgrade can break a consumer in a way the current model
+cannot. That is bought, not avoided, and the version surface above is what makes
+it survivable.
+
+**If the script survives for non-Go consumers it must be GENERATED** from the
+library's command surface, or the two copies come straight back — which is the
+failure this entry exists to end.
+
+#### Suggested cut
+
+1. **The version surface.** ✅ **Landed 2026-09-18** — `hzapi/`, a middleware on
+   `/api/`, and every client declaring itself: `configmgr`, `cmd/hz` and the bash
+   script. One integer, not semver, because the only question is "can these
+   talk" and semver invites an argument about whether a change is breaking —
+   decided optimistically, under deadline, by whoever wants to ship. One version
+   for the whole API, because the families ship from one binary.
+
+   A missing header is served and logged, because hz-client sent none and
+   refusing would have broken every consumer on the day this shipped; the log is
+   the evidence for eventually flipping `UnversionedOK`, so that becomes a
+   decision someone makes holding proof rather than a default that drifts into
+   place. A header present but unparseable is refused — that is a client bug,
+   not a legacy client.
+
+   A client NEWER than the server is refused too. Serving it and hoping is how a
+   consumer meets a missing field as a nil dereference in production instead of
+   a refusal on its first call.
+
+   **And the `bans` bug is fixed** — the thing that justified the work. It had
+   printed `created=- expires=never` for every ban for as long as the script has
+   existed.
+2. **The trivial verbs**, as a `deploy`/`site`/`ban` client package beside
+   `configmgr`. Lifting `internal/apitypes` is mechanical — nothing in it depends
+   on `internal`-only packages — but mirror rather than import, for the reason
+   `configmgr/types.go` records.
+3. **`site push`**, which is self-contained and removes the `tar` shell-out.
+4. **`promote` and `rolling` last**, because they are the only genuinely new
+   design and the ones most likely to want a second opinion on the progress API.
+
+**Not scheduled.** Scoped so the size is known, not because it is next.
+
+## Found during the render/apply seam refactor (2026-09-20) — deliberately left
+
+Three things surfaced while separating `internal/haproxy`'s pure half from its
+privileged half. None were fixed there: a refactor whose whole claim is
+byte-identical output must not also change behaviour.
+
+- **`GetServerState` misreads the admin-state bitmask.** The comment says
+  `bit0=FMAINT, bit5=FDRAIN`, so FDRAIN is 32, not `6`. The code compares the
+  field as exact strings (`!= "0" && != "6"` → maint, `== "6"` → drain) and
+  `strings.Contains(adminState, "drain")` is dead code against a numeric field.
+  **A genuinely draining server most likely reports `maint`.** Worth checking
+  against a real socket before changing, since the fix depends on what haproxy
+  actually emits.
+- **`WriteConfig` derives its directory by string trim** —
+  `strings.TrimSuffix(h.configPath, "/haproxy.cfg")`. Any other basename yields
+  `dir == configPath`, so `MkdirAll` is skipped and the 503 page lands in
+  `<configPath>/errors/`. Only bites a non-default config path.
+- **The three frontend blocks duplicate their bodies** — `local_access` ACL,
+  XFF strip, host ACLs, jail/rate-limit/deny/`use_backend`, written out three
+  times. A rule added to two of three is a silent hole, which is exactly what
+  `TestMFAJailEmitsRedirectInEveryFrontend` exists to catch. Much safer to
+  deduplicate now that it lives in a pure function and a golden comparator can
+  prove the output unchanged.
+
+## Found during the dnsmasq/iptables seam refactor (2026-09-20) — deliberately left
+
+- **The records read-back misreads every domain-expanded host record.**
+  `ParseMappings` (was the body of `GetMappings`) splits a `host-record=` line on
+  `,` and takes field 1 as the address. But `host-record=` takes a *list of
+  names* followed by the address, and hz writes exactly that whenever a local
+  domain is set — `host-record=desktop,desktop.lan,192.168.x.y` parses as
+  `desktop → desktop.lan`. The address is never read.
+  <br>Harmless today only because nothing on the write path reads it back (see
+  the dnsmasq entry below). It stops being harmless the moment anyone builds a
+  drift check on it, which is the obvious next use. The fix is one line — take
+  the last field, not field 1 — plus a decision about what the *other* names on
+  the line should map to. Left because a refactor claiming byte-identical output
+  must not also change behaviour.
+  `TestParseMappingsMisreadsExpandedHostRecords` pins the current behaviour and
+  says to delete itself when the bug is fixed on purpose.
+- **A doc comment was attached to the wrong function.** `SetMappings`'s
+  paragraph ("treating every entry as a wildcard… New callers should prefer
+  `SetRecords`") sat immediately above `SetLocalDomain`, with `SetLocalDomain`'s
+  own one-liner appended to it — so `go doc SetMappings` showed nothing and
+  `go doc SetLocalDomain` showed both. Reattached during the move. Not a
+  behaviour change; noted because it is the kind of thing a file split silently
+  launders.
+
+### Where the seam pattern transfers, and where it fights
+
+- **`internal/iptables`** — ✅ done 2026-09-20. The claim below was *mostly*
+  right and wrong in one place, recorded because the correction is the useful
+  part: `classify.go` did import `os/exec`. `LiveRules` and `runIptablesSave`
+  shelled out to `iptables-save` from inside the file that classifies, which is
+  the exact leak the guard is for. They moved to `reconcile.go`; the parser
+  (`parseIptablesSave`, `scopeLiveRules`) stayed, because parsing text is pure.
+  `forwards.go` also imports `net`, for `ParseIP`/`ParseCIDR` only — so the
+  guard allows the import and checks every *use* by name instead
+  (`TestPureHalfUsesNetForParsingOnly`).
+  <br>Original claim, for the record: *"already done in substance.
+  `rules.go`/`forwards.go`/`classify.go` have no `exec`/`os` and take an
+  `Inputs` struct; `reconcile.go` applies. Cost is headers and naming."*
+- **`internal/dnsmasq`** — ✅ done 2026-09-20. **The named fight did not exist.**
+  The claim was that the hosts file is the state of record. It is not: *no*
+  production caller reads it. Every write path is
+  `SetRecords(cfg.DeriveDNSRecords())` — config is the state of record, the file
+  is an output, and the file says so in its own generated header.
+  `GetMappings`/`SetMappings`/`AddMapping`/`RemoveMapping` had zero non-test
+  callers in the tree.
+  <br>So the resolution was option 1 (pass the record set in, haproxy's
+  `configInput()` shape) with no fight to have. The read-back was **kept and
+  documented** rather than deleted, because the file does live on a box an admin
+  can log into: `ParseMappings` is now pure and separate from the file read, so
+  drift between "what hz would write" and "what is on the box" is computable
+  from two strings, off-box. `TestGetMappingsSeesEditsMadeOutsideHz` pins it.
+  <br>The smaller fight was real: `ensureServiceUnit`/`clearStartLimit`/
+  `systemctlWithJournal`/`Status` moved to `unit.go`, apart from `apply.go`'s
+  file writes, and a guard test keeps `os/exec` out of `apply.go`. The two are
+  different privileges — writing `/etc/dnsmasq.d/*` versus installing a unit
+  that runs anything as root — and hz-agent should be able to grant one without
+  the other.
+- **`internal/wireguard`** — **done (2026-09-20)**, `render.go` / `apply.go` /
+  `wireguard.go`. All four predicted fights were real; three resolved, one
+  deliberately only half-resolved:
+  - `GenerateKeyPair` stayed apply-side and `render.go` cannot reach anything
+    that mints a key — `seam_test.go` walks the AST for it, because "the
+    renderer emits config that *contains* an identity" is the failure mode
+    unique to this package.
+  - `GetNextIP` split into a pure `NextIP(vpnRange, used)` plus a
+    gather-and-delegate method. Allocation is a decision, so the set arrives as
+    an argument.
+  - `detectDefaultInterface` moved to `apply.go`. `ExpectedPostUp/Down` already
+    took the interface as a parameter; the function just sat next to them.
+  - **`Load()` was NOT resolved, on purpose.** The file is still the state of
+    record; what changed is that parsing is pure (`ParseConfig`) and the
+    manager holds the peer set. Moving the set into hz's own store is the model
+    change in phase 4 items 13–15 (Segments, `VPNRange` plural), and mixing it
+    into a file split would have made the no-behaviour-change claim
+    unprovable. Until then the line-patch renderers (`renderPeerUpdate`,
+    `renderPeerRemoval`, …) exist and are unexported precisely because they
+    encode "the file is the state of record" and should be deleted, not ported.
+
+## Found during the wireguard seam split (2026-09-20) — deliberately left
+
+- **Removing a peer whose `AllowedIPs` precedes its `PublicKey` leaves an
+  orphan block.** `renderPeerRemoval` identifies the peer by its `PublicKey`
+  line and then walks *backwards* over already-emitted lines, stopping at the
+  first line that is not `[Peer]`, a comment, or blank. A stanza written
+  `[Peer] / # name / AllowedIPs / PublicKey` therefore keeps its `[Peer]`,
+  its comment and its `AllowedIPs`, and loses only the `PublicKey` — which
+  `wg-quick` rejects, so the interface fails to come up on the next reload.
+  hz always writes `PublicKey` first (`RenderPeerBlock`), so this only bites a
+  hand-edited or imported config. Pre-existing on `dev`; verified, untouched.
+- **`GetServerPublicKey` reads `w.privateKey` without the mutex** while
+  `Load()` writes it under one. A real data race, not a theoretical one — a
+  status page refresh during a reload is the way to hit it. Preserved verbatim
+  rather than fixed, so the refactor stayed byte-for-byte.
+- **`skipNextComment` in the peer-update transform is never set true.** Three
+  references, all assignments to `false` plus one read. The "skip the old
+  comment line if we just added a new one" branch has never executed; the
+  comment replacement happens in place in the backwards walk instead. Dead
+  since it was written.
+- **`detectDefaultInterface` exists twice, verbatim.** `internal/wireguard`'s
+  unexported copy and `config.DetectDefaultInterface`, which is what every
+  external caller actually uses (`main.go`, `reconcile_iptables.go`,
+  `handlers_api_system_fix.go`). Same `/proc/net/route` parse, same
+  `00000000` match, two places to fix. Collapsing them means picking a
+  direction for the dependency, which is a decision, not a cleanup.
+- **`listenPort` is parsed and then never read** outside `wireguard_test.go`.
+  It survives a round trip anyway via `RawInterface`. Harmless, but it is state
+  the manager carries for nobody.
+- **`ValidatePublicKey` recompiles its regexp on every call.** One
+  `regexp.MustCompile` at package scope; not worth a behaviour-change risk
+  inside this pass.
+- **`internal/autoheal`** — **does not transfer.** `Run()` *is* apply; there is
+  no desired-state text to render. Its analogous seam is
+  `plan(observed) → []Action` / `execute([]Action)`, which needs an explicit
+  observation struct that does not exist. A different refactor, not the fifth
+  instance of this one.
+
+## Found during the letsencrypt/acme seam split (2026-09-21) — deliberately left
+
+Six things surfaced while separating the certificate packages' pure halves from
+their privileged ones, and while building the comparator that proves the split
+changed nothing. None were fixed there, for the same reason as every pass
+before it: a refactor whose claim is identical behaviour must not also change
+behaviour. Every one is pinned by the comparator as *current* behaviour, so
+fixing one will make that comparison fail — which is the point.
+
+- **A corrupt `fullchain.pem` re-requests a certificate every 12 hours, for
+  ever.** Three defects compound. `GetCertInfo` declares an `error` return and
+  has never returned one: five `openssl x509` reads, each best-effort, so a
+  file openssl cannot parse comes back as a `*CertInfo` with every field empty
+  and `err == nil`. `GetCertInfoForDomain` only *stats* the file before calling
+  it, so "unreadable" and "fine" are indistinguishable. `CheckCertSANs` then
+  diffs an empty SAN set against the configured one and reports **every**
+  configured SAN missing, which `runCertRenewalSweep`
+  (`internal/server/server.go:1729`) reads as "SAN set changed, renewing".
+  `certRenewalInterval` is 12h, so that is two issuances a day against a
+  rate-limited CA, and the new certificate is written over the corrupt one —
+  which would fix it, unless the request is what is failing. The fix is for
+  `GetCertInfo` to fail when it parsed nothing, and for `CheckCertSANs` to
+  distinguish "no certificate" from "unreadable certificate". The comparator's
+  `unparseable cert file` fixture pins today's behaviour on both sides.
+- **`CheckCertSANs`'s fourth return value is dead.** It is `nil` on every path,
+  including the one where `GetCertInfoForDomain` failed and the error is
+  discarded in favour of `(false, nil, nil, nil)`. Both call sites
+  (`server.go:1730`, `handlers_services.go:583`) already write `_` for it, so
+  nothing is checking anything. Either return the error or drop the return.
+- **`PackageAllForHAProxy` always returns nil.** It logs and continues per
+  domain, so a gateway where packaging failed for *every* domain reports
+  success, and `server.go:1762`'s `if err != nil` cannot fire. HAProxy then
+  reloads against a cert directory nothing wrote. It should return a joined
+  error, or at least a count.
+- **`createCloudflareProvider` gates the zone token on the wrong field.**
+  `CF_ZONE_API_TOKEN` is set from `CloudflareAPIToken` but only `if
+  cfg.CloudflareZoneID != ""` — so a config with a zone id and no token sets
+  the variable to the empty string, and a config with a token and no zone id
+  never sets it at all. lego wants the token; the zone id is not a token.
+- ✅ **Done 2026-09-21 (item 12 step 3).** `Config.WriteMaintenancePageFiles`
+  was a second writer into the HAProxy errors directory and was not in the
+  privilege audit. It needed the thing the agent's file model did not have —
+  **delete what is not listed** — which is now `agent.Directory`: hz claims the
+  directory and the names in it, the agent removes what is not listed.
+  `Config.MaintenancePages` is the shared renderer; the writer stays until item
+  12 step 5.
+- **`Status.LegoAvailable` is a hardcoded `true` that lands in an `Installed`
+  field alongside real checks.** `handlers_api_system.go:266` assigns it to
+  `le.Installed`, four lines from `wg.Installed = binaryOnPath("wg")` and
+  `hap.Installed = binaryOnPath("haproxy")`. Same field, same card, same word —
+  but for WireGuard and HAProxy it means "hz looked", and for Let's Encrypt it
+  means "hz compiled". Since lego IS compiled in, the honest status for that
+  card is whether an ACME **account** exists (`<certDir>/accounts/account.key`),
+  which is a question that can actually be answered no. The comment at
+  `handlers_api_system.go:256` already says that is what it was supposed to
+  mean.
+
+## Found during the import work (2026-09-20) — deliberately left
+
+- **`updateConfig` stores before it saves** (`internal/server/server.go:496`).
+  A config that fails `Save()` validation is already live in the server's
+  memory by the time the error comes back, so a rejected write still changes
+  what the running process believes. Pre-existing, untouched. Both import
+  handlers work around it by building and validating the whole result before
+  calling `updateConfig` — which is the workaround, not the fix.
+- **There is no `hz project add`.** Projects can only be created by
+  `hz import --execute` or by hand-editing `config.json`, so `hz feed set` is
+  usable only on an imported tree. A real hole in the write surface: the model
+  can be read and inherited from, and only half-written.
+
+## ✅ The backup does not contain the database — FIXED 2026-10-03, moved to `done.md`
+
+## ◻ Found while classifying privileged operations (2026-09-21)
+
+From `plan/design/privilege-classification.md`. None fixed there — that investigation
+changed no code. Each names the section with the evidence.
+
+- ~~**IP forwarding is never persisted.**~~ ✅ **FIXED** 2026-09-25, with the
+  §3.1 #1 hand-over (`privilege-audit.md` §7 B) — the two are one change,
+  because what was missing is a persistent FILE and a file is what the agent
+  owns. `wireguard.EnableIPForwarding` now writes
+  `/etc/sysctl.d/70-hz-ip-forward.conf` as well as the live flag, both halves
+  are attempted and both failures reported, and hz declares the same two files
+  to the agent from one set of constants (`internal/server/ipforward.go`).
+
+  **The entry's own evidence was stale, and only half of it in the way it
+  claimed.** It named three writers; there are TWO. `autoheal.go:264` is gone —
+  `autoheal.Run` was deleted in `e08f3dd` and nothing in `internal/autoheal`
+  has mentioned forwarding since. `main.go:479` is real but at `:399` now
+  (`checker.checkNetwork`, `homelab-horizon check --fix`). `apply.go:173` is
+  real and is the one the fixer button reaches. The join script is still at
+  `handlers_ha.go:582-583` and still appends to `/etc/sysctl.conf` — a
+  bootstrap a human runs on a NEW box, not hz's writer, so it is out of this
+  change and stays as it is.
+
+- ~~**`buildAgentDesired` has no no-default-route stand-down.**~~ ✅ **FIXED**
+  in `iptablesSectionFor` (`internal/server/handlers_agent.go`): hz now sends
+  the section flagged `stood_down` with no rule sets, the agent plans a
+  `KindUnknown` (never "in sync", never applied), and the projection carries a
+  `reason: "stood-down"` gap. `privilege-audit.md` §8.3 item 1.
+
+- **`iptables.ExpectedRules` drops the port forwards silently when the
+  out-interface cannot be named.** `forwardRules` returns nil on an empty
+  `OutIface` (`forwards.go:113`) and `ExpectedRules` skips the MASQUERADE
+  (`rules.go:192`), so the function's answer to "what should this box's
+  firewall look like" changes from *the gateway's rules* to *the gateway's
+  rules minus its NAT and every forward* with no signal that anything was
+  omitted. Fail-closed is right for a GENERATOR — emitting `-o ""` would be
+  worse — but the caller cannot tell a degraded set from a complete one, so
+  every caller has to re-derive the condition itself. Three do
+  (`reconcileIPTables`, `handleAPIIPTablesReconcile`, now `iptablesSectionFor`)
+  and each wrote its own check. The honest shape is for `ExpectedRules` to
+  return the omission alongside the rules — a second return value, or an
+  `Inputs`-level precondition — so a caller that forgets cannot silently get a
+  set that deletes things. Deliberately NOT done with the stand-down: changing
+  the generator's signature touches every caller including the reconciler, and
+  the stand-down had to land on its own first. `privilege-audit.md` §8.3
+  item 1.
+
+- **`classifyReportedRules` has the same shape as the stand-down bug and no
+  stand-down.** `handlers_agent_observed.go:340` classifies a machine's
+  REPORTED live rules against `buildClassifierInputs()`' expected/stale sets
+  and discards the `currentIface` it returns. During the same flap, the drift
+  screen therefore labels a reporting machine's MASQUERADE and forward jumps
+  **stale** — "auto-heal will remove", in the UI's own words — when hz has
+  merely lost its own default route. It is a READ, so it removes nothing; it is
+  a false verdict on a screen an operator acts on, which is why it is recorded
+  rather than ignored. Same fix shape — skip the classify and say hz could not
+  compute a verdict this pass — but NOT by reusing `AgentIPTables.readable`,
+  which means "the agent could not look" and would move the blame to the
+  reporting machine. It needs a fourth firewall reading beside `readFirewall`'s
+  unmanaged / unreadable / empty: *the machine looked, hz could not judge*.
+  `privilege-audit.md` §8.3 item 1.
+
+- **Backup restore's archive-path handling.** `handleRestore`
+  (`handlers_backup.go`) derives destination paths for cert material from
+  uploaded zip entry names. Recorded as a class of issue — archive extraction
+  deriving a write path from archive-supplied names — deliberately without a
+  recipe, because **this repo is public**. §3.8. It should be looked at in the
+  same pass that routes restore's privileged writes through items 12.2/12.3,
+  since both touch the same loop.
+
+- **`POST /api/v1/wg/create-config` has no confirmation.** It mints a new
+  WireGuard server keypair and rewrites `wg0.conf`, which invalidates every
+  client config ever handed out — **because every issued client config pins
+  the OLD server public key**, which is the mechanism the audit citation for
+  this (`privilege-audit.md §1.4`) never actually contained; rescued here
+  2026-09-24 when `privilege-classification.md` was deleted (`privilege-audit.md` §1.4 already records the
+  consequence). ~~In `SystemHealthTab.tsx` it is a plain button.~~ ✅ **CLOSED
+  2026-09-25, and not with a modal.** The endpoint is gone and the button with
+  it: the work is `sudo hz-agent wg-create-config`, which **refuses** when
+  `wg0.conf` exists rather than confirming — asked twice, by a `stat` that
+  carries the explanation and by `O_EXCL` on the write. A refusal an operator
+  has to answer by moving the file aside leaves a backup; a modal they can click
+  through does not. §3.1 #5, §7 A.
+
+- **The static supervisor warns "dev mode" on a correct production host.**
+  `static_supervisor.go:135` logs `static file server running in-process (not
+  root; dev mode)` whenever `Geteuid() != 0` — which is exactly the state item
+  12 puts a production gateway into. §3.6.
+
+- **Two stale references in `plan/design/architecture.md`.** `User=root` is at
+  `internal/config/config.go:2809`, not `:2477`; and item 12's "four `Geteuid`
+  gates" misses two more in `internal/server` (`static_supervisor.go:110`,
+  `handlers_site.go:109`) which change branch at the flip rather than going
+  away. §1.5.
+
+## ◻ Found re-measuring the privilege audit on a VM (2026-09-22)
+
+From the re-run recorded in `plan/design/privilege-audit.md`. Docs-only pass, nothing
+fixed here. Each names the section with the evidence.
+
+- **A box enrolled before the issuer change cannot rotate its credential.**
+  `92c956a` made hz the issuer and made it refuse a machine it does not declare
+  — but the credential store (`<config>.agents`) and the Machine record
+  (`config.json`) are two files and nothing backfills one from the other.
+  Measured on `hz-audit`: `hz machine ls` reported "No machines declared" while
+  a valid credential record for that machine existed, and `hz-agent enroll
+  --rotate` was refused until `hz machine add` was run. The existing credential
+  keeps working, so this is an upgrade-path gap, not an outage — but re-enrolling
+  or rotating a live box needs a declaration step nobody is told about. Either
+  backfill a Machine record from each `<config>.agents` entry on load, or have
+  the refusal message say "this machine is enrolled but not declared" rather
+  than "hz declares no machine named …". `privilege-audit.md` §1.1.
+
+- **hz never reinstalls its own systemd unit, so a unit-template fix does not
+  reach an existing box.** `c36b2b4` added `NotifyAccess=main` and the
+  `STATUS=degraded …` sd_notify so `systemctl status` would stop saying a
+  gateway with dead subsystems is fine. Measured: on a VM whose unit was written
+  by an older binary, `NotifyAccess=none` and `StatusText` was empty — the fix
+  was inert until the unit was rewritten by hand. `maybeSelfInstall` skips under
+  systemd, `install` is not re-run on upgrade, and nothing warns that the unit on
+  disk is older than the binary. A comparison of the running unit against
+  `show-systemd` at boot, logged once, would have caught it.
+  `privilege-audit.md` §1.3.
+
+- **`privilege-classification.md` §2 row 23 is wrong about when the static
+  supervisor runs.** It says the office gateway exercises it "yes, if static
+  sites exist". `s.static.Start()` (`server.go:1865`) is unconditional, and the
+  fork was observed failing on a VM whose config declares no `static_root` at
+  all. Every root gateway forks a `nobody` child at boot whether or not anything
+  is served. Row 24 (`sitedeploy`'s chown) does depend on static sites; row 23
+  does not. `privilege-audit.md` §1.5.
+
+- **Three privileged capabilities are missing from both inventories.**
+  `ObservedStore.save` writing `<config>.observed` in the hz process
+  (`internal/agent/observed_store.go:210`), and in the agent
+  `exec.Command("systemctl", <action>, <unit from the payload>)`
+  (`internal/agent/apply.go:130`) and the `agent.Directory`-bounded
+  `os.Remove` (`:295`). All three are argued about in
+  `privilege-classification.md` §4 and marked closed; none became a row in its
+  §2 table, which is what item 12's readiness list reads.
+  `privilege-audit.md` §7.
+
+- **§5.2's three bounding properties do not cover a payload-named target.**
+  "Never a shell string / never a subcommand from a request / never reachable
+  from the web process" are all satisfied by the agent's new `Units` poke, which
+  nonetheless lets hz name which systemd unit gets restarted. A fourth property
+  belongs there before anything produces a `Units` entry — ~~and nothing does
+  yet~~. **Corrected 2026-09-25: two things do now**, and the second of them
+  acts. `staticFilesSection` names `hz-static.service` with NO action (the
+  brake, deliberately), and the log-retention hand-over names
+  `systemd-journald` with `restart` — the first payload that pokes anything.
+  Both targets are constants in hz's own tree and neither comes from a request,
+  so the three properties still hold; what is missing is the property that says
+  so out loud. `privilege-audit.md` §7.
+
+- **`FilesSection.Units` is section-wide, so a poke fires for the wrong file.**
+  The generic section has one `Units` list and one `touched[SubsystemFiles]`
+  flag, so on a machine where hz manages the journal, changing the static site
+  map restarts `systemd-journald` (`internal/server/logretention.go`). Cheap
+  and lossless — a socket-activated log daemon, poked only when some file in
+  the section actually moved — but it is a restart for a reason that has
+  nothing to do with the unit. The fix is associating a unit with the file that
+  needs it, which is a wire change on both sides of a version boundary; not
+  worth it for one over-poke, and worth it the moment a third acting unit
+  lands.
+
+- **`<config>.observed` is missing from item 12's chown line.**
+  `privilege-classification.md` §7.C names `config.json`, its directory,
+  `<config>.token` and `<config>.agents`. The observed store is a fourth file in
+  the same directory, written by the hz process on every agent report, and an
+  unwritable one after the flip is a log flood on a 5-second clock.
+  `privilege-audit.md` §7.
+
+- **Two authenticated surfaces still have no server-side authentication test.**
+  `handleDeployAPI` and `/mcp` (`privilege-audit.md` §6 rows 1 and 2), unchanged
+  since September. Not privileged paths, so not flip blockers — but row 1's
+  caller is the service-deploy token, which is also what reaches
+  `handlers_ban.go`'s root `iptables` call.
+
+## ◻ Two machine lists, one word — and `hz cm` → `hz config` made it louder (2026-09-22)
+
+`hz config machines` and `hz machine ls` print different fleets. They are joined
+by NOTHING but a name string, and nothing checks that the names agree.
+
+- `hz machine ls` reads `config.Machine` (`internal/config/machine.go:41`) — a
+  DECLARED record in `config.json`: identity plus segment membership, with no
+  project and no environment by design.
+- `hz config machines` reads the `cm_machines` table in `hz.db`
+  (`internal/db/configmgr.go`) — an OBSERVED record the config manager creates
+  when a box enrols itself: public key, fingerprint, registrations, secret keys.
+
+A box can be in one and not the other, in both directions. Enrolling does not
+declare, declaring does not enrol, and a typo in either name produces two rows
+that look like two machines. `hz config remove <machine>` destroys the enrolment
+and leaves the declaration; `hz machine rm` does the reverse.
+
+**What the rename changed about it.** Nothing in the code, and it made the
+surface read WORSE. `hz cm machines` was opaque enough that an operator had to
+look `cm` up, and the lookup told them which list they were in. `hz config
+machines` and `hz machine ls` are now two plain-English commands that look like
+the same thing, with `machine(s)` the salient word in both. The rename traded a
+what-is-`cm` question for a which-one-is-this question, and the second is the
+one people answer wrong without noticing they answered it.
+
+Deliberately NOT fixed in `refactor/cm-to-config`: the rename is a noun change,
+this is a model question. Options, none costed:
+
+1. Rename the config-manager verb to what its rows actually are — enrolments,
+   not machines (`hz config enrolled`). Cheapest, and it stops the CLI implying
+   the two lists are the same kind of thing.
+2. Join them: `hz machine show <name>` reports the enrolment state, and
+   `hz config machines` flags an enrolled name that is not declared. Needs a
+   decision on whether enrolling an undeclared name is an error or a warning.
+3. Leave both and say so in each one's help. Weakest, but closest to what ships
+   today — neither command mentions the other at all.
+
+**Evidence:** `internal/config/machine.go:41` and the `cm_machines` statements
+in `internal/db/configmgr.go` are the two record types; nothing in either file,
+nor in `cmd/hz/cm_machines.go` or `cmd/hz/machine.go`, references the other.
+
+## ◻ Two UI strings name commands that do not exist (found during the rename, 2026-09-22)
+
+Both predate `refactor/cm-to-config` and were carried through it verbatim (only
+`cm` → `config`), because fixing which VERB they name is a different change:
+
+- `ui/src/components/CMPromote.tsx` renders a COPY BUTTON for
+  `hz config push <env>/<app>/<role>`, and `ui/src/components/CMConfigs.tsx`
+  names `hz config push` in prose. There is no `push` verb — `runCM`'s switch is
+  `key | recovery | machines | pending | approve | deny | remove | promote |
+  show | resolve`. Pushing is deliberately not hz's: `plan/design/config-manager.md`
+  line 572 settles it as `redline config push`, i.e. the APP links `configmgr`
+  and calls `configmgr.Push`. So the button hands an operator a command that
+  cannot work, in a shape that looks authoritative because it is copyable.
+- `ui/src/components/CMPromote.tsx:123` helper text says a config id can be
+  "pasted from `hz config ls`". There is no `ls` verb at that level either; the
+  id comes from the Configs tab, or from `hz config resolve`.
+
+The fix is to name the real command (the app's own `<app> config push`, and the
+Configs tab), which needs someone to decide what the button should say when the
+command is not hz's to give.
+
+
+---
+
+# Excluded from the next release (decided 2026-09-24)
+
+**The icebox IS what the release excludes.** Each entry below was an active row
+in plan.md and is now out, with the reason it is out and the condition that
+brings it back. The release itself is `plan.md`, "The release".
+
+## ◻ `Environment.Upstream` — a rung whose placements live in another hz
+
+**Moved back into the release 2026-09-29** (operator decision: nested hz instances are in) → [plan.md](plan.md), "Tier 1b — nested hz instances". The design is unchanged: [design/estate.md](design/estate.md) Part A §5.
+
+## ◻ The registry crossing — packages mirrored, config proxied
+
+**Moved back into the release 2026-09-29** (operator decision: nested hz instances are in) → [plan.md](plan.md), "Tier 1b — nested hz instances". The design is unchanged: [design/estate.md](design/estate.md) Part A §5.
+
+## ◻ Segment records → an actual WireGuard tunnel
+
+**Moved back into the release 2026-09-29** (operator decision: nested hz instances are in) → [plan.md](plan.md), "Tier 1b — nested hz instances". The design is unchanged: [design/estate.md](design/estate.md) Part A §5.
+
+## ◻ Realms — a segment lives in an addressing realm
+
+**Why excluded:** Tier 3, design only, and it carries **8 decisions that are the operator's** — including whether a segment may have no project, which is already a live contradiction in the tree (`Segment.Project` is required; `example-projection.md:114` says `seg:people` has none). A design with 8 open operator calls is not a release item.
+
+⚠ **It is a wire-format break when it lands:** `agent.SegmentKey{Segment, PublicKey}`'s own comment states the precondition realms void — unfixed it would silently write one realm's key into another realm's member.
+
+**Resume condition:** the operator answers §11's decisions. Design: [design/estate.md](design/estate.md) Part B (825 lines, unchanged).
+
+> Was plan.md item 25, verbatim:
+>
+> ◻ design only (`plan/design/estate.md`, 825 lines). Segment identity becomes `(realm, segment)`; **interface uniqueness stays GLOBAL** and is strengthened, not weakened — a box has one interface namespace however many realms it is in. Roaming is the **Endpoint**, not the address, evidenced by `config.WGPeer` carrying a tunnel address and no Endpoint field at all. ⚠ **`agent.SegmentKey{Segment, PublicKey}` is a wire-format break** whose own comment states the precondition realms void — unfixed it would silently write one realm's key into another realm's member. 8 decisions left to the operator, including whether a segment may have no project (`seg:people`)
+
+## ◻ Invites that can require a sign-in
+
+**Why excluded:** ◻ not started **and unwritten** — no section, no design, no measurement. It has never been more than a line in a table, and a line in a table is not a release item.
+
+**Resume condition:** someone writes down what it should do.
+
+> Was plan.md item 7, verbatim:
+>
+> ◻ not started, **and unwritten** — no section exists
+
+
+## ◻ The DNS record manager has never been verified end to end
+
+Rescued 2026-09-24 from `dns-records.md` before that file was deleted (the code
+carries the design; it does not carry this).
+
+All phases shipped and are unit-tested, but **no live DNS provider and no
+two-peer fleet existed in the environment it was built in**, so a real add-TXT
+round trip and a real drift round trip have never been driven.
+
+**Why excluded:** it is a verification, not a build, and it needs credentials
+and a second box. It waits on SYSTEMS, not on a decision.
+
+**Resume condition:** a zone with live provider credentials, and a second hz
+instance. **Watch on the first run:** the first publish seeds
+`LastPublishedRecords`, so a public-IP change reads as `driftPublish`, not
+`driftDrift` — confirm that on a real IP rotation, because the drift-halt scope
+is ALL DNS sync and a false `driftDrift` halts automated failover.
+
+- ❗ **Replace the copied DNS credential on `<loadtest-instance>` with a scoped IAM user** (operator, 2026-10-01: "definitely set a to do item"). On 2026-10-01 the office's Route53 credential (profile `iodesystems-dns`, IAM user `WorkCertBotDns`) was COPIED to that box's `/root/.aws/credentials` (0600), at the operator's explicit choice, because no AWS console was available. That credential sees **seven** hosted zones (incl. the operator's personal domain), so the box can rewrite DNS for all of them; hz config on the box is the only limit. Fix: hosted zone `loadtest.redline.iodesystems.com` + an IAM user with ChangeResourceRecordSets/ListResourceRecordSets/GetHostedZone on that zone ARN only, GetChange on `change/*`, ListHostedZones*; swap the key; delete the copied one from the box. **Resume condition:** the operator has AWS console access.

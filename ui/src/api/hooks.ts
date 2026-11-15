@@ -1,4 +1,7 @@
 import type {
+  LocalDNSResponse,
+  NtfySettingsResp,
+  NtfySettingsReq,
   OIDCSettingsResp,
   OIDCSettingsReq,
   OIDCDiscoverResp,
@@ -9,6 +12,22 @@ import type {
   CMResolveResp,
   CMPromotionGateResp,
   CMCurrentKeyResp,
+  AgentObservedResponse,
+  ProjectResp,
+  ProjectAddReq,
+  ProjectRmReq,
+  RemovalResp,
+  EnvironmentResp,
+  MachineResp,
+  SegmentResp,
+  MachineProjectionResp,
+  VersionDriftResponse,
+  HostsViewResp,
+  HostShowResp,
+  ServiceAssignReq,
+  ServiceAssignResp,
+  DNSRecordSetRequest,
+  DNSRecordSetResponse,
 } from "./generated-types";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
@@ -20,12 +39,14 @@ import type {
   BanListResponse,
   CheckHistoryResponse,
   CheckStatus,
+  ProbeDiagnosisData,
   RemoteProbe,
   RemoteProbeRequest,
   RemoteProbeTest,
   RemoteProbeToken,
   ConfigShare,
   CreateInviteResponse,
+  CreateInviteReq,
   DashboardData,
   DNSDriftStatusResponse,
   DomainsData,
@@ -35,7 +56,6 @@ import type {
   HAStatusResponse,
   Invite,
   IPTablesReport,
-  IPTablesRule,
   IPTablesRulesResponse,
   MFAEnrollResponse,
   MFASettingsResponse,
@@ -45,10 +65,13 @@ import type {
   PendingChanges,
   PeerConfigResponse,
   RekeyPeerResponse,
+  RekeyPeerReq,
   Service,
+  ServiceAddResp,
   ServiceIntegration,
   SettingsData,
   SystemHealth,
+  DoctorResp,
   SystemMetrics,
   VPNPeer,
   Zone,
@@ -66,6 +89,7 @@ import {
   BanListResponseSchema,
   CheckHistoryResponseSchema,
   ChecksListSchema,
+  ProbeDiagnosisDataSchema,
   ConfigSharesSchema,
   DashboardDataSchema,
   DNSDriftStatusResponseSchema,
@@ -88,7 +112,151 @@ import {
   RemoteProbeListSchema,
   RemoteProbeTestSchema,
   RemoteProbeTokenSchema,
+  AgentObservedResponseSchema,
 } from "./schemas";
+
+// The fleet as the machines last described it — the drift screen's only read.
+//
+// Polled rather than left to go stale on screen: every value it renders is an
+// observation with an age beside it, and an age that stops advancing while the
+// tab is open is the exact lie the screen exists to prevent. Sixty seconds is
+// the agent's default cadence (handlers_agent_observed.go).
+export function useAgentObserved() {
+  return useQuery({
+    queryKey: ["agent", "observed"],
+    queryFn: () =>
+      apiFetch<AgentObservedResponse>("/agent/observed", {
+        schema: AgentObservedResponseSchema,
+      }),
+    refetchInterval: 60_000,
+  });
+}
+
+// The model: projects, environments, machines, instances, and one machine's
+// projection. Five reads behind three read-only screens.
+//
+// NOT POLLED, unlike the drift screen. Every value these carry is DECLARED —
+// hz asserts it and it changes when somebody edits the config, not on a
+// cadence — except the instance rows, which carry their own age and are read
+// through the same `presentObservation` the drift screen uses. A declared
+// value does not go stale on screen, so refetching it on a timer would buy
+// nothing and spend a request per minute per open tab.
+
+/** The project tree, each node's feed already resolved with its provenance. */
+export function useProjects() {
+  return useQuery({
+    queryKey: ["projects"],
+    queryFn: () => apiFetch<ProjectResp[]>("/projects"),
+  });
+}
+
+/**
+ * Declare a project. Reversible and renders nothing, which is why it is in the
+ * UI at all (plan/design/ui.md Part 1 §8 A: write in the UI for the reversible
+ * acts). The server validates the whole next config before it stores it.
+ */
+export function useAddProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (req: ProjectAddReq) =>
+      apiFetch<ProjectResp>("/projects/add", { method: "POST", body: JSON.stringify(req) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects"] });
+      qc.invalidateQueries({ queryKey: ["pending"] });
+    },
+  });
+}
+
+/**
+ * Remove a project — or, without `confirm`, ask what that would take. The dry
+ * run writes nothing and answers 200 with the dependants as a list; a blocked
+ * removal answers the same way with `blocked` set.
+ */
+export function useRemoveProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (req: ProjectRmReq) =>
+      apiFetch<RemovalResp>("/projects/rm", { method: "POST", body: JSON.stringify(req) }),
+    onSuccess: (_resp, req) => {
+      if (!req.confirm) return;
+      qc.invalidateQueries({ queryKey: ["projects"] });
+      qc.invalidateQueries({ queryKey: ["environments"] });
+      qc.invalidateQueries({ queryKey: ["services"] });
+      qc.invalidateQueries({ queryKey: ["pending"] });
+    },
+  });
+}
+
+/** Every declared rung, across every project. Name and posture are separate. */
+export function useEnvironments() {
+  return useQuery({
+    queryKey: ["environments"],
+    queryFn: () => apiFetch<EnvironmentResp[]>("/environments"),
+  });
+}
+
+/**
+ * The declared segments: the networks a project's machines sit on.
+ *
+ * `Segment.Project` is REQUIRED — enforced in `ValidateSegments` and again in
+ * `AddSegment` — which makes this the cleanest project-scoped record in the
+ * config, and until `/p/$project/network` nothing in the browser had ever asked
+ * for it: `GET /api/v1/segments` has been served since the Segment record
+ * landed and `grep -rn "/segments" ui/src/` returned nothing.
+ *
+ * Not polled, for the reason the rest of this block is not: a segment is
+ * declared, not observed.
+ */
+export function useSegments() {
+  return useQuery({
+    queryKey: ["segments"],
+    queryFn: () => apiFetch<SegmentResp[]>("/segments"),
+  });
+}
+
+/** The declared machines: identity, owner (`""` is global) and segment membership. */
+export function useMachines() {
+  return useQuery({
+    queryKey: ["machines"],
+    queryFn: () => apiFetch<MachineResp[]>("/machines"),
+  });
+}
+
+/**
+ * Every approved instance, with the version its rung declares beside the one
+ * it last reported and the age of that reading.
+ *
+ * THE FAILURE OF THIS QUERY IS INFORMATION, not an empty list. hz answers 503
+ * when it has no identity store at all, and the screens read `isError` as "hz
+ * cannot say what is placed" rather than as "nothing is placed" — the two are
+ * different facts and conflating them is the bug these screens exist to avoid.
+ * So `retry: false`: a screen waiting through three silent retries shows the
+ * wrong one of those two for as long as it waits.
+ */
+export function useVersionDrift() {
+  return useQuery({
+    queryKey: ["cm", "version-drift"],
+    queryFn: () => apiFetch<VersionDriftResponse>("/cm/version-drift"),
+    retry: false,
+  });
+}
+
+/**
+ * What hz says one machine should look like — the pure projection.
+ *
+ * A machine hz does not declare is a normal 200 carrying a gap that says so,
+ * so this hook has no "not found" branch and must not grow one.
+ */
+export function useMachineProjection(machine: string) {
+  return useQuery({
+    queryKey: ["machines", "projection", machine],
+    queryFn: () =>
+      apiFetch<MachineProjectionResp>(
+        `/machines/projection?machine=${encodeURIComponent(machine)}`,
+      ),
+    enabled: machine !== "",
+  });
+}
 
 export function useDashboard() {
   return useQuery({
@@ -143,6 +311,11 @@ export function useServiceIntegration(name: string) {
 export interface ServiceMutationInput {
   originalName?: string;
   name: string;
+  // Sent only on ADD from a project's Services tab. Omitted everywhere else on
+  // purpose: `/services/edit` is full-replace and treats an absent project as
+  // "leave it alone" (ServiceRequest.Project is a pointer), which is what keeps
+  // an edit from silently unassigning the service.
+  project?: string;
   domains: string[];
   // Round-tripped on every edit: the server assigns this from the request,
   // so omitting it would quietly un-park a reserved slot.
@@ -190,12 +363,15 @@ export function useAddService() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: ServiceMutationInput) =>
-      apiFetch("/services/add", {
+      apiFetch<ServiceAddResp>("/services/add", {
         method: "POST",
         body: JSON.stringify(input),
       }),
-    onSuccess: () => {
+    onSuccess: (created) => {
       qc.invalidateQueries({ queryKey: ["services"] });
+      // The create answer IS the integration: seed it, so the panel opened
+      // right after shows the minted token without a second round trip.
+      qc.setQueryData(["services", "integration", created.name], created);
       qc.invalidateQueries({ queryKey: ["domains"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
       qc.invalidateQueries({ queryKey: ["pending"] });
@@ -215,6 +391,42 @@ export function useEditService() {
       qc.invalidateQueries({ queryKey: ["services"] });
       qc.invalidateQueries({ queryKey: ["domains"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
+      qc.invalidateQueries({ queryKey: ["pending"] });
+    },
+  });
+}
+
+/**
+ * Put one service into the project tree, or — with both fields empty — take it
+ * back out. J8, which had no UI caller at all until this landed.
+ *
+ * NOT /services/edit, deliberately, and the server side says why: edit is
+ * full-replace across domains, proxy, DNS and forwards, so an assign routed
+ * through it would have to round-trip the whole service and could drop a port
+ * forward somebody added between the read and the write. Two fields move; this
+ * writes two fields.
+ *
+ * `projects` and `environments` are invalidated as well as `services`: a
+ * project's `services` list is computed server-side from the assignment, so
+ * leaving them alone would show the moved service in both its old project and
+ * its new one until something else refetched.
+ *
+ * Nothing is RENDERED by an assignment — no DNS record, no HAProxy backend —
+ * so there is no sync to trigger, and `pending` is invalidated only because the
+ * config file itself changed.
+ */
+export function useAssignService() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (req: ServiceAssignReq) =>
+      apiFetch<ServiceAssignResp>("/services/assign", {
+        method: "POST",
+        body: JSON.stringify(req),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["services"] });
+      qc.invalidateQueries({ queryKey: ["projects"] });
+      qc.invalidateQueries({ queryKey: ["environments"] });
       qc.invalidateQueries({ queryKey: ["pending"] });
     },
   });
@@ -442,7 +654,9 @@ export function useTriggerSync() {
 export function useAddPeer() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: { name: string; extraIPs: string; profile: string }) =>
+    // project omitted is global, exactly like a service added with no project
+    // — the server defaults `PeerAddReq.Project` to "".
+    mutationFn: (input: { name: string; extraIPs: string; profile: string; project?: string }) =>
       apiFetch<AddPeerResponse>("/vpn/peers/add", {
         method: "POST",
         body: JSON.stringify(input),
@@ -462,6 +676,10 @@ export function useEditPeer() {
       name: string;
       extraIPs: string;
       profile: string;
+      // A pointer server-side: omitted leaves attribution alone, "" makes the
+      // client global. The edit form always shows and sends the current
+      // selection, so callers here always pass it explicitly.
+      project?: string;
     }) =>
       apiFetch("/vpn/peers/edit", {
         method: "POST",
@@ -531,10 +749,10 @@ export function useGetPeerConfig(publicKey: string) {
 export function useRekeyPeer() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (publicKey: string) =>
+    mutationFn: (req: RekeyPeerReq) =>
       apiFetch<RekeyPeerResponse>("/vpn/peers/rekey", {
         method: "POST",
-        body: JSON.stringify({ publicKey }),
+        body: JSON.stringify(req),
         schema: RekeyPeerResponseSchema,
       }),
     onSuccess: () => {
@@ -590,9 +808,10 @@ export function useInvites() {
 export function useCreateInvite() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () =>
+    mutationFn: (req: CreateInviteReq) =>
       apiFetch<CreateInviteResponse>("/vpn/invites/create", {
         method: "POST",
+        body: JSON.stringify(req),
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["vpn", "invites"] });
@@ -603,10 +822,10 @@ export function useCreateInvite() {
 export function useDeleteInvite() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (token: string) =>
+    mutationFn: (id: string) =>
       apiFetch("/vpn/invites/delete", {
         method: "POST",
-        body: JSON.stringify({ token }),
+        body: JSON.stringify({ id }),
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["vpn", "invites"] });
@@ -797,6 +1016,22 @@ export function useAddRecord() {
   });
 }
 
+// Declares a whole (name, type) value set in one write — the NS set of a
+// delegation, which per-value adds would publish one nameserver at a time.
+export function useSetRecordSet() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: DNSRecordSetRequest & { zone: string }) =>
+      apiFetch<DNSRecordSetResponse>("/zones/records/set", {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    onSettled: (_data, _err, variables) => {
+      qc.invalidateQueries({ queryKey: ["zones", "records", variables.zone] });
+    },
+  });
+}
+
 export function useEditRecord() {
   const qc = useQueryClient();
   return useMutation({
@@ -880,6 +1115,8 @@ export function useAddCheck() {
       type: string;
       target: string;
       interval: number;
+      // Attributed project (CheckAddReq.project); omitted or "" is global.
+      project?: string;
     }) =>
       apiFetch("/checks/add", {
         method: "POST",
@@ -947,6 +1184,24 @@ export function useChecks() {
     queryKey: ["checks"],
     queryFn: () =>
       apiFetch<CheckStatus[]>("/checks", { schema: ChecksListSchema }),
+    refetchInterval: 30000,
+  });
+}
+
+// --- The edge diagnosis ---
+//
+// useChecks answers "did this probe pass". This answers "why not, and whose
+// device has to change" — the ladder over a name's whole result set rather
+// than one probe's verdict. Same cadence as the rows it sits above, so the two
+// never disagree on screen.
+
+export function useProbeDiagnosis() {
+  return useQuery({
+    queryKey: ["probe-diagnosis"],
+    queryFn: () =>
+      apiFetch<ProbeDiagnosisData>("/checks/diagnosis", {
+        schema: ProbeDiagnosisDataSchema,
+      }),
     refetchInterval: 30000,
   });
 }
@@ -1075,7 +1330,9 @@ export function useBans() {
 export function useBanIP() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: { ip: string; timeout?: number; reason?: string }) =>
+    // project attributes the ban (plan/design/ui.md, Decision 1 amendment 6);
+    // omitted or "" is global. BanRequest.project on the wire.
+    mutationFn: (input: { ip: string; timeout?: number; reason?: string; project?: string }) =>
       apiFetch("/bans/add", {
         method: "POST",
         body: JSON.stringify(input),
@@ -1260,6 +1517,23 @@ export function useMFAException() {
   });
 }
 
+/** Tag a VPN client "infra" (a machine: no MFA while vpn-only; reason required)
+ * or "user" (a person: MFA applies). POST /vpn/peers/tag. */
+export function usePeerTag() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { name: string; tag: "user" | "infra"; reason?: string }) =>
+      apiFetch("/vpn/peers/tag", {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["mfa", "settings"] });
+      qc.invalidateQueries({ queryKey: ["vpn", "peers"] });
+    },
+  });
+}
+
 export function useMFAExceptionRevoke() {
   const qc = useQueryClient();
   return useMutation({
@@ -1355,6 +1629,17 @@ export function useSystemHealth() {
   });
 }
 
+// useDoctor reads GET /api/v1/doctor — the findings `hz doctor` prints. deep
+// runs the checks that ask outside hz (DNS providers, public DNS), so it is
+// fetched only when asked for, never on an interval.
+export function useDoctor(deep: boolean) {
+  return useQuery({
+    queryKey: ["system", "doctor", deep],
+    queryFn: () => apiFetch<DoctorResp>(deep ? "/doctor?deep=1" : "/doctor"),
+    refetchInterval: deep ? false : 60000,
+  });
+}
+
 export function useAptAudit() {
   return useQuery({
     queryKey: ["system", "apt-audit"],
@@ -1392,33 +1677,17 @@ export const useFixMasquerade = () => useSystemFix("system/fix/masquerade");
 export const useFixWGForwardChain = () => useSystemFix("system/fix/wg-forward-chain");
 export const useFixWGRules = () => useSystemFix("system/fix/wg-rules");
 export const useFixLogRetention = () => useSystemFix("system/fix/log-retention");
-export const useCreateWGConfig = () => useSystemFix("wg/create-config");
-export const useInstallHorizonUnit = () => useSystemFix("system/install/horizon-unit");
-export const useEnableHorizon = () => useSystemFix("system/enable/horizon");
-export const useFixHAProxyLogging = () => useSystemFix("haproxy/fix-logging");
+// There is no useCreateWGConfig and no useFixHAProxyLogging. Both endpoints
+// are gone: each did its work by piping an hz-built shell string through
+// systemd-run to escape hz's own sandbox, and both moved to a CLI verb on the
+// binary that owns the file (plan/design/privilege-audit.md §7 A) —
+// `sudo hz-agent wg-create-config`, `sudo homelab-horizon fix-haproxy-logging`.
+// The health card still DIAGNOSES both and names the command, which is the same
+// shape the unit rows and the dependency rows already have.
 export const useWriteDNSMasqConfig = () => useSystemFix("dnsmasq/write-config");
 export const useReloadDNSMasq = () => useSystemFix("dnsmasq/reload");
 export const useStartDNSMasq = () => useSystemFix("dnsmasq/start");
 export const useFixDNSMasqInterfaces = () => useSystemFix("dnsmasq/fix-interfaces");
-
-// Package install — distinct from the generic fixer because it takes a body.
-export function useInstallPackage() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (pkg: string) =>
-      apiFetch<{ ok: boolean; package: string; output: string }>(
-        "/system/install/package",
-        {
-          method: "POST",
-          body: JSON.stringify({ package: pkg }),
-        },
-      ),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["system", "health"] });
-      qc.invalidateQueries({ queryKey: ["system", "apt-audit"] });
-    },
-  });
-}
 
 // --- IPTables rule inventory (Phase 5) ---
 
@@ -1458,20 +1727,6 @@ export function useUnblessIPTablesRule() {
   });
 }
 
-export function useRemoveIPTablesRule() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (rule: IPTablesRule) =>
-      apiFetch("/iptables/remove", {
-        method: "POST",
-        body: JSON.stringify(rule),
-      }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["iptables", "rules"] });
-    },
-  });
-}
-
 // --- Observability topology ---
 //
 // Read-modify-write, mirroring services: load the whole TopologyResp, mutate
@@ -1492,6 +1747,44 @@ export function useSaveTopologyHosts() {
       apiFetch("/topology/hosts", {
         method: "PUT",
         body: JSON.stringify({ hosts }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["topology"] });
+    },
+  });
+}
+
+/**
+ * Every declared host plus "@self", each with the records that resolve through
+ * it and what those records resolve to now. The /hosts screen's one read.
+ *
+ * Separate from useTopology on purpose: that query is the exporter editor's
+ * read-modify-write buffer (raw hosts + probed targets), and this one is the
+ * derived "what points at this box" answer. Sharing a cache key would make a
+ * host edit invalidate a probe sweep and vice versa.
+ */
+export function useHostsView() {
+  return useQuery({
+    queryKey: ["topology", "hosts-view"],
+    queryFn: () => apiFetch<HostsViewResp>("/topology/hosts/view"),
+  });
+}
+
+/**
+ * Repoint one declared host. THE one-edit move: every record written @name
+ * follows it in a single config write, which is what the indirection is for.
+ *
+ * Invalidates the topology reads rather than patching them — the resolved
+ * value of every dependant changed, and re-reading is the only way to be sure
+ * the screen shows what hz now holds.
+ */
+export function useSetHostIP() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { name: string; ip: string }) =>
+      apiFetch<HostShowResp>("/topology/hosts/set", {
+        method: "PUT",
+        body: JSON.stringify(input),
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["topology"] });
@@ -1651,13 +1944,6 @@ export interface LocalDNSRecord {
   shadowsDerived?: string;
 }
 
-interface LocalDNSResponse {
-  records: LocalDNSRecord[];
-  derived?: LocalDNSRecord[];
-  enabled: boolean;
-  servedAt?: string;
-}
-
 export function useLocalDNS() {
   return useQuery({
     queryKey: ["dns", "local"],
@@ -1705,6 +1991,32 @@ export function useSetLocalDNSDomain() {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["dns", "local"] });
+    },
+  });
+}
+
+// --- ntfy notification settings ----------------------------------------------
+//
+// The GET never returns the access token — only hasNtfyToken — so a blank
+// token field on save means "keep it"; clearToken removes it.
+
+export function useNtfySettings() {
+  return useQuery({
+    queryKey: ["ntfy-settings"],
+    queryFn: () => apiFetch<NtfySettingsResp>("/settings/ntfy"),
+  });
+}
+
+export function useSaveNtfySettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: NtfySettingsReq) =>
+      apiFetch<NtfySettingsResp>("/settings/ntfy", {
+        method: "PUT",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["ntfy-settings"] });
     },
   });
 }
@@ -1812,14 +2124,19 @@ export function useCMDeny() {
   });
 }
 
-export function useCMConfigs(env: string, app: string, role: string) {
+export function useCMConfigs(
+  project: string,
+  env: string,
+  app: string,
+  role: string,
+) {
   return useQuery({
-    queryKey: ["cm-configs", env, app, role],
+    queryKey: ["cm-configs", project, env, app, role],
     queryFn: () =>
       apiFetch<CMConfigResp[]>(
-        `/cm/configs?env=${encodeURIComponent(env)}&app=${encodeURIComponent(app)}&role=${encodeURIComponent(role)}`,
+        `/cm/configs?project=${encodeURIComponent(project)}&env=${encodeURIComponent(env)}&app=${encodeURIComponent(app)}&role=${encodeURIComponent(role)}`,
       ),
-    enabled: !!env && !!app && !!role,
+    enabled: !!project && !!env && !!app && !!role,
   });
 }
 
@@ -1836,19 +2153,20 @@ export function useCMConfig(id: string | null) {
 // there are always candidates the winner passed over, and silent resolution is
 // only acceptable when you can ask what it resolved to.
 export function useCMResolve(
+  project: string,
   env: string,
   app: string,
   role: string,
   version: string,
 ) {
   return useQuery({
-    queryKey: ["cm-resolve", env, app, role, version],
+    queryKey: ["cm-resolve", project, env, app, role, version],
     queryFn: () =>
       apiFetch<CMResolveResp>(
-        `/cm/resolve?env=${encodeURIComponent(env)}&app=${encodeURIComponent(app)}` +
+        `/cm/resolve?project=${encodeURIComponent(project)}&env=${encodeURIComponent(env)}&app=${encodeURIComponent(app)}` +
           `&role=${encodeURIComponent(role)}&version=${encodeURIComponent(version)}`,
       ),
-    enabled: !!env && !!app && !!role && !!version,
+    enabled: !!project && !!env && !!app && !!role && !!version,
   });
 }
 
@@ -1868,19 +2186,24 @@ export function useCMPromotionGate(configID: string | null, targetEnv: string) {
 // The advisory current-key pointer. A 404 means nobody has announced one, which
 // is a different fact from "the current key is X" and must be shown as such —
 // a client told the wrong one seals under whatever its filesystem offers.
-export function useCMCurrentKey(env: string, app: string, role: string) {
+export function useCMCurrentKey(
+  project: string,
+  env: string,
+  app: string,
+  role: string,
+) {
   return useQuery({
-    queryKey: ["cm-current-key", env, app, role],
+    queryKey: ["cm-current-key", project, env, app, role],
     queryFn: async () => {
       try {
         return await apiFetch<CMCurrentKeyResp>(
-          `/cm/current-key?env=${encodeURIComponent(env)}&app=${encodeURIComponent(app)}&role=${encodeURIComponent(role)}`,
+          `/cm/current-key?project=${encodeURIComponent(project)}&env=${encodeURIComponent(env)}&app=${encodeURIComponent(app)}&role=${encodeURIComponent(role)}`,
         );
       } catch (e) {
         if (e instanceof ApiError && e.status === 404) return null;
         throw e;
       }
     },
-    enabled: !!env && !!app && !!role,
+    enabled: !!project && !!env && !!app && !!role,
   });
 }

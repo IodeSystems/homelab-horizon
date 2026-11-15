@@ -20,6 +20,11 @@ const (
 	ProfileLanAccess  = "lan-access"
 	ProfileFullTunnel = "full-tunnel"
 	ProfileVPNOnly    = "vpn-only"
+
+	// ProfileUpstream is a nested hz reaching this (its parent) hz: the one
+	// port hz's own API listens on, at the gateway's WG address, and nothing
+	// else — no other VPN client, no LAN, nothing forwarded. See vpn_upstream.go.
+	ProfileUpstream = "upstream"
 )
 
 // DNSProviderType identifies the DNS provider for ACME challenges and DNS management
@@ -131,8 +136,21 @@ type Config struct {
 	// restart into a permanent change nobody asked to make. That is the whole
 	// safety property of --listen, so it gets a field that Save cannot see.
 	listenOverride string
-	AdminToken     string `json:"admin_token,omitempty"`
-	KioskURL       string `json:"kiosk_url"`
+
+	// VPNListen is the second listener: hz ALSO answers on the gateway's
+	// WireGuard address, at ListenAddr's port, when ListenAddr is a specific
+	// address that is not already that one (loopback, a LAN IP). nil means on.
+	// It exists so a nested hz's upstream client (vpn_upstream.go) reaches this
+	// hz while --listen keeps the plain-HTTP port off the LAN. Never 0.0.0.0:
+	// the whole point of binding loopback is that the LAN does not see this
+	// port. Per-instance; peer-sync pins it (mergeRemoteIntoLocal).
+	VPNListen *bool `json:"vpn_listen,omitempty"`
+	// noVPNListen is --no-vpn-listen: this run only, never saved — the same
+	// reasoning as listenOverride.
+	noVPNListen bool
+
+	AdminToken string `json:"admin_token,omitempty"`
+	KioskURL   string `json:"kiosk_url"`
 	// AdminURL, when set, is the canonical base URL hz uses for integration
 	// snippets (e.g. "https://hz.example.com"). It overrides the self-service
 	// domain and the request host. Set this when neither is what an integration
@@ -152,6 +170,62 @@ type Config struct {
 	// Services configuration (Layer 2: Services)
 	Zones    []Zone    `json:"zones"`
 	Services []Service `json:"services"`
+	// Projects is the tree, and deliberately only the tree: a name and a parent. No
+	// inherited settings. Inheritance semantics (what overrides, what merges, what is
+	// transitive) are the expensive half and are not needed until one project actually
+	// shares something with another. A parent field costs nothing now and keeps that door
+	// open; inheritance would have to be lived with.
+	Projects []Project `json:"projects,omitempty"`
+	// Environments are the rungs: a project, a name, a posture, the environment it
+	// promotes from, and the version it declares. Additive in exactly the way Projects
+	// is — a record that says what is true, conferring nothing. `From` names the
+	// promotion source and does NOT inherit posture, version or anything else; the
+	// moment it did, changing one environment would silently change another.
+	Environments []Environment `json:"environments,omitempty"`
+	// Machines are the boxes: identity and segment membership, and deliberately
+	// neither a project nor an environment — those are coordinates of an
+	// INSTANCE, and one machine hosts instances from several projects
+	// (plan/design/architecture.md, "Instance, not machine, carries the environment").
+	// Additive in exactly the way Projects and Environments are. See
+	// internal/config/machine.go for what else is absent and why.
+	Machines []Machine `json:"machines,omitempty"`
+	// BuildAgents are the credentials allowed to start builds, one project
+	// each — not machines — and the sha256 of each one's token
+	// (build_agent.go). Declared state.
+	BuildAgents []BuildAgent `json:"build_agents,omitempty"`
+	// LegacyBuilders is the pre-2026-10-02 `builders` key. Read only:
+	// LoadFromJSON and Save migrate it into BuildAgents and clear it.
+	LegacyBuilders []LegacyBuilder `json:"builders,omitempty"`
+	// HZInstances are the nested hz this one serves rungs to (hz_instance.go):
+	// a separate config layer each, NOT a Machine and not an HA peer.
+	// Environment.Upstream names one. Declared state.
+	HZInstances []HZInstance `json:"hz_instances,omitempty"`
+	// LegacyMachineHZ is every pre-B3 `machines[].hz` marker, captured by
+	// UnmarshalJSON. Never written: LoadFromJSON and Save migrate it into
+	// HZInstances (MigrateLegacyMachineHZ) and clear it.
+	LegacyMachineHZ []LegacyMachineHZ `json:"-"`
+	// LegacyHZCarriers are the machines that carried a migrated marker and
+	// nothing else — removal candidates the server settles against its agent
+	// credential store (SettleLegacyHZCarriers). Never written.
+	LegacyHZCarriers []string `json:"-"`
+	// Segments are the networks a Machine.Segments NAME resolves to: a project,
+	// a range, an interface, and the addressed members on it. Additive in
+	// exactly the way Projects, Environments and Machines are, and empty on
+	// every config written before it existed — which is why ValidateMachines
+	// checks a membership's EXISTENCE only once one segment is declared. See
+	// internal/config/segment.go for the shape and what it deliberately does
+	// not hold.
+	Segments []Segment `json:"segments,omitempty"`
+
+	// Key custody. Both fields are fleet-shared and both ride the backup zip,
+	// which is the whole reason they are here rather than in the identity
+	// database — see internal/config/recovery.go for that argument and for why
+	// a stored wrap discloses nothing.
+	//
+	// Opt-in: empty is the default and a config with no recipients behaves
+	// exactly as it did before this existed.
+	RecoveryRecipients []RecoveryRecipient `json:"recovery_recipients,omitempty"`
+	RecoveryWraps      []RecoveryWrap      `json:"recovery_wraps,omitempty"`
 
 	// Public IP for external access.
 	// PublicIP is the *cached* result of auto-detection. Treat as
@@ -254,6 +328,16 @@ type Config struct {
 	// effect of editing a service would be indefensible.
 	UsersDB string `json:"users_db,omitempty"`
 
+	// ArtifactMaxBytes caps one artifact upload (PUT /api/v1/artifacts/).
+	// 0 is the default, 512 MiB. Artifacts live in <data dir>/artifacts, the
+	// directory UsersDB is in (upstream_hz.go).
+	ArtifactMaxBytes int64 `json:"artifact_max_bytes,omitempty"`
+
+	// Upstream makes THIS hz a nested ("child") hz for the listed rungs: it
+	// pulls their applied artifact from the parent hz and serves it locally
+	// (upstream_hz.go, plan/plan.md N4a). nil is "not nested".
+	Upstream *UpstreamHZ `json:"upstream,omitempty"`
+
 	// RateLimit is the coarse volume tier at the edge (EDGE-4).
 	//
 	// hz already had two blunt instruments: an iptables ban, which is binary
@@ -324,7 +408,21 @@ type Config struct {
 	SSLHAProxyCertDir string `json:"ssl_haproxy_cert_dir"`
 
 	// Service monitoring with ntfy notifications
-	NtfyURL            string         `json:"ntfy_url,omitempty"`             // e.g., "https://ntfy.sh/my-homelab-alerts"
+	NtfyURL string `json:"ntfy_url,omitempty"` // e.g., "https://ntfy.sh/my-homelab-alerts"
+	// NtfyToken is an optional ntfy access token, sent as
+	// "Authorization: Bearer <token>" on every notification hz posts. Empty
+	// means an unauthenticated POST (a public topic whose name is the
+	// secret). WRITE-ONLY across the API: the settings endpoint reports only
+	// hasNtfyToken, and it is excluded from the pending diff (pending.go
+	// settingsExcluded).
+	//
+	// PEER-SYNC REPLICATES IT. It is not pinned in mergeRemoteIntoLocal, so
+	// it travels in the full config the primary serves at /api/peer/config
+	// (peer-only, over the site-to-site tunnel) and every peer stores and
+	// uses the primary's value: one token for the fleet, a rotation on the
+	// primary reaches every peer on its next pull, and a token set on a
+	// non-primary is overwritten by that pull.
+	NtfyToken          string         `json:"ntfy_token,omitempty"`
 	ServiceChecks      []ServiceCheck `json:"service_checks,omitempty"`       // Health checks for services
 	DisabledAutoChecks []string       `json:"disabled_auto_checks,omitempty"` // Names of disabled auto-generated checks
 
@@ -337,8 +435,19 @@ type Config struct {
 	// VPN-based admin authentication
 	VPNAdmins []string `json:"vpn_admins,omitempty"` // Client names with admin access via VPN IP
 
-	// Per-peer routing profiles: "lan-access" (default), "full-tunnel", "vpn-only"
+	// Per-peer routing profiles: "lan-access" (default), "full-tunnel",
+	// "vpn-only", "upstream" (ValidPeerProfile)
 	VPNProfiles map[string]string `json:"vpn_profiles,omitempty"`
+
+	// VPNProjects attributes a VPN client to a project: peer name -> project.
+	// Absent means global. ATTRIBUTION ONLY — no renderer reads it; wg0.conf,
+	// the WG-FORWARD/WG-INPUT chains and the peer's client config are the same
+	// for every value (TestAttributionChangesNoRenderedArtifact).
+	//
+	// A map keyed by peer name, like VPNProfiles, and NOT a field on WGPeer:
+	// WGPeers is rebuilt from wg0.conf on every peer write
+	// (internal/server/handlers_peer.go snapshotWGPeers), which would drop it.
+	VPNProjects map[string]string `json:"vpn_projects,omitempty"`
 
 	// WireGuard MFA (TOTP or passkey, per-connect)
 	VPNMFAEnabled   bool              `json:"vpn_mfa_enabled,omitempty"`
@@ -364,6 +473,24 @@ type Config struct {
 	// the requirements that level actually asks about — see SAQNone.
 	PCISAQLevel string `json:"pci_saq_level,omitempty"`
 
+	// JournalRetention is hz saying "I keep this machine's journal", and it is
+	// the RECORD the log-retention hand-over needed (privilege-audit.md §7 B,
+	// §3.1 #13). Until it existed, the only trace of an operator asking for
+	// twelve months of audit history was the drop-in file itself — so hz could
+	// write that file from a button but could never DECLARE it, and a
+	// declaration is what the agent owns.
+	//
+	// Off is not "hz wants a short journal": it is hz having no opinion about
+	// this machine's journal at all, and hz emits nothing for journald in that
+	// state. There is deliberately no way to express "keep less" — hz has
+	// never had one, and inventing it here would mean claiming a directory in
+	// order to take something away.
+	//
+	// Set by the log_persistence fixer (PCI DSS 10.5.1), and ADOPTED at boot on
+	// a machine whose drop-in predates this field — see
+	// Server.adoptJournalRetention.
+	JournalRetention bool `json:"journal_retention,omitempty"`
+
 	// Passkeys, an alternative second factor to TOTP. A peer may hold several
 	// (laptop platform authenticator, a hardware key as backup); any one of
 	// them opens a session, and either factor satisfies the jail.
@@ -375,16 +502,29 @@ type Config struct {
 	// anyone in VPNAdmins bypasses MFA permanently, so an operator can't lock
 	// themselves out.
 	//
-	// MFAScopeAll: nobody is exempt, admins included. Required by PCI DSS
-	// 8.5.1, which permits no standing bypass for any user — the only escape
-	// is a documented, time-limited exception, which is what VPNMFAExceptions
-	// is for.
+	// MFAScopeAll: no PERSON is exempt, admins included. Required by PCI DSS
+	// 8.5.1, which permits no standing bypass for any user — a person's only
+	// escape is a documented, time-limited exception (VPNMFAExceptions).
+	// Machines are not users: an upstream client and an infra client
+	// (VPNInfraClients) stay exempt here, as system accounts under 8.6.
+	// A person's "forever" MFA session is not honoured in this scope and
+	// cannot be requested (MFADurations drops it).
 	VPNMFAScope string `json:"vpn_mfa_scope,omitempty"`
 
 	// VPNMFAExceptions are time-limited, reasoned bypasses. They always
 	// expire: a permanent exception is the thing "all" mode exists to
 	// eliminate, so there is deliberately no way to express one.
 	VPNMFAExceptions map[string]MFAException `json:"vpn_mfa_exceptions,omitempty"` // peer name -> exception
+
+	// VPNInfraClients are VPN clients tagged "infra": a machine — a service
+	// box — with no person to answer an MFA prompt. Every other client is
+	// "user" (owner, 2026-11-07: "VPN can be tagged infra or user"; "This is a
+	// service box, so it should be exempt"). Exempt from the jail in BOTH
+	// scopes, the way an upstream client is: PCI DSS treats a system account
+	// doing automated work under 8.6, not 8.4's MFA. Never expires, so it
+	// carries a required reason and who/when, and every one is reported
+	// (MFAExemption, hz doctor). Honoured only while the profile is vpn-only.
+	VPNInfraClients map[string]InfraClient `json:"vpn_infra_clients,omitempty"` // peer name -> tag
 
 	// WireGuard VPN client peers — shared state, replicated to non-primary
 	// instances via the pull loop. Handlers update this after every WG
@@ -419,8 +559,12 @@ type Config struct {
 	// IP banning
 	IPBans []IPBan `json:"ip_bans,omitempty"`
 
-	// Auto-heal: automatically install and configure missing dependencies on startup
-	AutoHeal bool `json:"auto_heal,omitempty"`
+	// `auto_heal` was here. Deleted 2026-09-22 with autoheal.Run
+	// (privilege-classification.md §3.5): a boot-path apt-get install gated
+	// behind a key that defaulted off. An unknown key in config.json is
+	// ignored on load, so a box that still carries it simply stops acting on
+	// it — which on every non-HA box is what was already happening.
+	// Dependencies are installed by `homelab-horizon install-deps`.
 
 	// Multi-instance HA (fleet) — see plan/plan.md
 	PeerID        string `json:"peer_id,omitempty"`        // local identity within the fleet
@@ -428,7 +572,7 @@ type Config struct {
 	Peers         []Peer `json:"peers,omitempty"`          // every other instance in the fleet
 
 	// Observability topology — declared hosts and Prometheus exporter scrape
-	// jobs for endpoints hz does not proxy (see plan/prometheus-topology.md).
+	// jobs for endpoints hz does not proxy.
 	Hosts     []HostDecl `json:"hosts,omitempty"`     // extra hosts beyond those derived from the port map
 	Exporters []Exporter `json:"exporters,omitempty"` // Prometheus exporter jobs (node, postgres, ...)
 
@@ -563,6 +707,353 @@ func (c *Config) PrimaryPeer() *Peer {
 	return nil
 }
 
+// Project groups services, and later machines and config, under one name.
+type Project struct {
+	Name   string `json:"name"`
+	Parent string `json:"parent,omitempty"`
+
+	// Feed is the package repository this project's machines install from,
+	// and the first — so far only — thing Parent confers on a descendant.
+	// See internal/config/feed.go for why this one may cascade when sealed
+	// config may not, and ResolveFeed for what a child declaring its own does
+	// to an ancestor's.
+	//
+	// A pointer because absent and empty are different answers: nil is "this
+	// project says nothing, ask my parent", and a zero Feed is a declaration
+	// with nothing in it, which ValidateFeeds rejects. Collapsing the two is
+	// goal property 6 in plan/design/architecture.md — the founding bug.
+	Feed *Feed `json:"feed,omitempty"`
+
+	// PinnedLines are release lines the operator keeps supported beyond the
+	// derived two (current and prior) — internal/config/lines.go.
+	PinnedLines []PinnedLine `json:"pinnedLines,omitempty"`
+}
+
+// ValidateProjects checks the project tree is usable: names unique, parents real, no
+// cycles, and every service naming a project that exists.
+//
+// A service may name no project. That is the state every service is in today, and
+// rejecting it would make this change a migration rather than an addition.
+func (c *Config) ValidateProjects() error {
+	byName := make(map[string]Project, len(c.Projects))
+	for _, p := range c.Projects {
+		if strings.TrimSpace(p.Name) == "" {
+			return errors.New("a project has no name")
+		}
+		if _, dup := byName[p.Name]; dup {
+			return fmt.Errorf("project %q is declared twice", p.Name)
+		}
+		if err := p.validatePins(); err != nil {
+			return err
+		}
+		byName[p.Name] = p
+	}
+	for _, p := range c.Projects {
+		if p.Parent == "" {
+			continue
+		}
+		if _, ok := byName[p.Parent]; !ok {
+			return fmt.Errorf("project %q names parent %q, which does not exist", p.Name, p.Parent)
+		}
+		// Walk to a root, bounded by the number of projects: a cycle cannot be longer
+		// than that without repeating, so exceeding it IS the cycle.
+		seen, cur := 0, p
+		for cur.Parent != "" {
+			if seen > len(c.Projects) {
+				return fmt.Errorf("project %q is in a parent cycle", p.Name)
+			}
+			cur = byName[cur.Parent]
+			seen++
+		}
+	}
+	for _, svc := range c.Services {
+		if svc.Project == "" {
+			continue
+		}
+		if _, ok := byName[svc.Project]; !ok {
+			return fmt.Errorf("service %q names project %q, which does not exist", svc.Name, svc.Project)
+		}
+	}
+	// Attribution (plan/design/ui.md, Decision 1 amendment 6). Every one of
+	// these is optional and "" means global; a NAMED project has to exist, or
+	// the record reads as global on every screen while claiming an owner.
+	attributed := func(kind, name, project string) error {
+		if project == "" {
+			return nil
+		}
+		if _, ok := byName[project]; !ok {
+			return fmt.Errorf("%s %q names project %q, which does not exist", kind, name, project)
+		}
+		return nil
+	}
+	for _, m := range c.Machines {
+		if err := attributed("machine", m.Name, m.Project); err != nil {
+			return err
+		}
+	}
+	for _, peer := range sortedKeys(c.VPNProjects) {
+		if err := attributed("VPN client", peer, c.VPNProjects[peer]); err != nil {
+			return err
+		}
+	}
+	for _, chk := range c.ServiceChecks {
+		if err := attributed("check", chk.Name, chk.Project); err != nil {
+			return err
+		}
+	}
+	for _, b := range c.IPBans {
+		if err := attributed("ban", b.IP, b.Project); err != nil {
+			return err
+		}
+	}
+	for _, r := range c.PortExclusions {
+		if err := attributed("port exclusion", r.Label(), r.Project); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Postures are the three rungs, in order. The slice IS the ordering: dev < staging <
+// prod. Kept explicit rather than left to string comparison, which would sort
+// dev < prod < staging and quietly make a promotion to prod look like a demotion.
+var Postures = []string{"dev", "staging", "prod"}
+
+// PostureRank returns a posture's position in the ladder, or -1 if it is not one of
+// the three. Compare ranks, never the strings.
+func PostureRank(posture string) int {
+	for i, p := range Postures {
+		if p == posture {
+			return i
+		}
+	}
+	return -1
+}
+
+// Environment is a rung: a posture at a placement. Name and Posture are separate on
+// purpose — several projects here have an environment *called* prod that sits at
+// staging's isolation level, and an honest posture beside an established name is worth
+// more than a relabel nobody would do. Collapsing the two would force the lie.
+//
+// From records that this environment is promoted into from another one in the same
+// project. It confers nothing, exactly as Project.Parent does not: it is the edge, not
+// an inheritance path. Version is the declared desired version and is opaque here — a
+// Debian version, an image tag, a git sha. hz displays the drift against what an
+// instance reports; it does not close it.
+type Environment struct {
+	Project string `json:"project"`
+	Name    string `json:"name"`
+	Posture string `json:"posture"`
+	From    string `json:"from,omitempty"`
+	Version string `json:"version,omitempty"`
+
+	// Upstream names the hz instance that holds this rung's placements, when
+	// they are not ours. An environment with an Upstream is declared here so
+	// that promotion edges into it and its version are ours to state — but
+	// asking "which machines run it" is a question for that hz, not a gap in
+	// this one (plan/design/estate.md Part A §5).
+	//
+	// It is the NAME of a declared HZInstance — a nested hz is its own record,
+	// never a Machine (B3, hz_instance.go). "" is placed here: hz answers from
+	// its own registrations. ValidateEnvironments refuses a name that resolves
+	// to no instance.
+	Upstream string `json:"upstream,omitempty"`
+}
+
+// envKey is the identity of an environment: names are unique per project, not globally,
+// because every project gets to have a "prod".
+type envKey struct{ project, name string }
+
+// Promotion errors. They are values rather than strings because the promotion gate
+// answers with one of them and the CLI has to tell "there is no edge" (never forcible —
+// declare the edge) from "the edge runs the other way" (forcible, deliberately).
+var (
+	// ErrNoSuchEnvironment means nothing is declared under that name. Promoting into
+	// an undeclared environment is not a permission question; there is no rung.
+	ErrNoSuchEnvironment = errors.New("no such environment")
+	// ErrAmbiguousEnvironment means several projects declare that name. Every project
+	// gets to have a "prod", so a bare name is not always an identity.
+	ErrAmbiguousEnvironment = errors.New("environment name is ambiguous across projects")
+	// ErrNoPromotionEdge means the target declares no From. The edge is the whole
+	// authority model — per-edge, asymmetric, separation of duties — so a target with
+	// no From is an environment nobody has said may be promoted into, from anywhere.
+	ErrNoPromotionEdge = errors.New("environment declares no promotion source")
+	// ErrWrongPromotionSource means the target's From names a different environment
+	// than the one being promoted from.
+	ErrWrongPromotionSource = errors.New("environment does not promote from that source")
+	// ErrNotUpward means the promotion does not climb the ladder by PostureRank.
+	// Forcible, because `loadtest` and `virgin` borrow a posture laterally and a rung
+	// is not a target — but never silent.
+	ErrNotUpward = errors.New("promotion is not upward by posture")
+)
+
+// CheckUpstream refuses an Upstream that names no declared hz instance. ""
+// is legal: placed here.
+func (c *Config) CheckUpstream(upstream string) error {
+	if upstream == "" {
+		return nil
+	}
+	if _, ok := c.FindHZInstance(upstream); !ok {
+		return fmt.Errorf("upstream %q names no declared hz instance — a nested hz is an Hz Instance record: declare it with its URL first%s",
+			upstream, c.hzInstanceHint())
+	}
+	return nil
+}
+
+// EnvironmentsNamed returns every declared environment with this name, across projects.
+// Zero, one or several: every project gets to have a "prod", so the name alone is not an
+// identity and a caller holding only a name has to be told when it is ambiguous.
+func (c *Config) EnvironmentsNamed(name string) []Environment {
+	var out []Environment
+	for _, e := range c.Environments {
+		if e.Name == name {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// LookupEnvironment resolves an environment by name, narrowed by project when one is
+// given. An empty project means "whichever project declares this name", which is an
+// answer only while exactly one does.
+func (c *Config) LookupEnvironment(project, name string) (Environment, error) {
+	candidates := c.EnvironmentsNamed(name)
+	if project != "" {
+		for _, e := range candidates {
+			if e.Project == project {
+				return e, nil
+			}
+		}
+		return Environment{}, fmt.Errorf("%w: %q in project %q", ErrNoSuchEnvironment, name, project)
+	}
+	switch len(candidates) {
+	case 0:
+		return Environment{}, fmt.Errorf("%w: %q", ErrNoSuchEnvironment, name)
+	case 1:
+		return candidates[0], nil
+	default:
+		projects := make([]string, 0, len(candidates))
+		for _, e := range candidates {
+			projects = append(projects, e.Project)
+		}
+		sort.Strings(projects)
+		return Environment{}, fmt.Errorf("%w: %q is declared by %s; name the project",
+			ErrAmbiguousEnvironment, name, strings.Join(projects, ", "))
+	}
+}
+
+// CheckPromotion answers whether `from` may be promoted into `to`, and it is the only
+// place that answer is computed.
+//
+// Two separate refusals, because they have different remedies and only one of them may
+// ever be overridden:
+//
+//   - NO EDGE. The target declares no From, or declares a different one. An edge is a
+//     statement that this promotion is a thing somebody intended; inventing one at the
+//     command line would make per-edge authority decorative. Declare it, then promote.
+//     Not forcible.
+//   - NOT UPWARD. The edge exists but the target sits at or below the source's posture.
+//     Refused by default — a config that ran nowhere stricter has generated no evidence
+//     — but forcible, because a lateral rung (`loadtest`, `virgin`) borrowing a posture
+//     is a real and intended shape, and refusing it outright would be wrong rather than
+//     safe.
+//
+// Postures are compared by PostureRank and never as strings: "prod" < "staging"
+// alphabetically, which would read a promotion to prod as a demotion.
+func CheckPromotion(from, to Environment) error {
+	if from.Project != to.Project {
+		return fmt.Errorf("%w: %q is in project %q and %q is in project %q; promotion is within one project",
+			ErrWrongPromotionSource, from.Name, from.Project, to.Name, to.Project)
+	}
+	if to.From == "" {
+		return fmt.Errorf("%w: %q in project %q has no `from`, so there is no edge into it from %q — declare one",
+			ErrNoPromotionEdge, to.Name, to.Project, from.Name)
+	}
+	if to.From != from.Name {
+		return fmt.Errorf("%w: %q promotes from %q, not from %q",
+			ErrWrongPromotionSource, to.Name, to.From, from.Name)
+	}
+	if PostureRank(to.Posture) <= PostureRank(from.Posture) {
+		return fmt.Errorf("%w: %q is %s and %q is %s",
+			ErrNotUpward, from.Name, from.Posture, to.Name, to.Posture)
+	}
+	return nil
+}
+
+// ValidateEnvironments checks the rungs are usable: names unique within a project,
+// projects real, postures known, promotion sources real and within the same project,
+// and no promotion cycles.
+//
+// The service rule is deliberately narrow: a service naming an environment that does
+// not exist is an error ONLY when it also names a project. A service with neither stays
+// legal — that is the state every service was in before the projects slice, and
+// ValidateProjects already refuses to make this a migration. An environment name on a
+// project-less service has nothing to resolve against, so there is nothing to check.
+func (c *Config) ValidateEnvironments() error {
+	projects := make(map[string]struct{}, len(c.Projects))
+	for _, p := range c.Projects {
+		projects[p.Name] = struct{}{}
+	}
+
+	byKey := make(map[envKey]Environment, len(c.Environments))
+	for _, e := range c.Environments {
+		if strings.TrimSpace(e.Name) == "" {
+			return errors.New("an environment has no name")
+		}
+		if strings.TrimSpace(e.Project) == "" {
+			return fmt.Errorf("environment %q has no project", e.Name)
+		}
+		k := envKey{e.Project, e.Name}
+		if _, dup := byKey[k]; dup {
+			return fmt.Errorf("environment %q is declared twice in project %q", e.Name, e.Project)
+		}
+		if _, ok := projects[e.Project]; !ok {
+			return fmt.Errorf("environment %q names project %q, which does not exist", e.Name, e.Project)
+		}
+		if PostureRank(e.Posture) < 0 {
+			return fmt.Errorf("environment %q in project %q has posture %q, which is not one of %s",
+				e.Name, e.Project, e.Posture, strings.Join(Postures, ", "))
+		}
+		if err := c.CheckUpstream(e.Upstream); err != nil {
+			return fmt.Errorf("environment %q in project %q: %w", e.Name, e.Project, err)
+		}
+		byKey[k] = e
+	}
+
+	for _, e := range c.Environments {
+		if e.From == "" {
+			continue
+		}
+		from := envKey{e.Project, e.From}
+		if _, ok := byKey[from]; !ok {
+			return fmt.Errorf("environment %q in project %q promotes from %q, which does not exist in that project",
+				e.Name, e.Project, e.From)
+		}
+		// Walk to a source that promotes from nothing, bounded by the number of
+		// environments: a cycle cannot be longer than that without repeating, so
+		// exceeding it IS the cycle. Same shape as the project parent walk.
+		seen, cur := 0, e
+		for cur.From != "" {
+			if seen > len(c.Environments) {
+				return fmt.Errorf("environment %q in project %q is in a promotion cycle", e.Name, e.Project)
+			}
+			cur = byKey[envKey{cur.Project, cur.From}]
+			seen++
+		}
+	}
+
+	for _, svc := range c.Services {
+		if svc.Project == "" || svc.Environment == "" {
+			continue
+		}
+		if _, ok := byKey[envKey{svc.Project, svc.Environment}]; !ok {
+			return fmt.Errorf("service %q names environment %q in project %q, which does not exist",
+				svc.Name, svc.Environment, svc.Project)
+		}
+	}
+	return nil
+}
+
 // ValidateFleet checks the multi-instance fields are internally consistent.
 // Returns nil if no fleet is configured (single-instance mode).
 func (c *Config) ValidateFleet() error {
@@ -634,6 +1125,11 @@ type IPBan struct {
 	ExpiresAt int64  `json:"expires_at,omitempty"` // unix timestamp, 0 = never
 	Reason    string `json:"reason,omitempty"`
 	Service   string `json:"service,omitempty"` // which service banned it
+
+	// Project attributes the ban; "" is global. ATTRIBUTION ONLY: enforcement
+	// is one gateway-wide INPUT DROP whatever this says, and the ban-sync LWW
+	// merge carries it with the rest of the record.
+	Project string `json:"project,omitempty"`
 }
 
 // Zone represents a DNS zone with shared configuration for DNS provider and SSL
@@ -671,6 +1167,11 @@ type DNSTombstone struct {
 	Value     string `json:"value"`                // the specific value being retracted
 	CreatedAt int64  `json:"created_at,omitempty"` // unix seconds, for surfacing a stuck retraction
 	Reason    string `json:"reason,omitempty"`     // e.g. "service ebb deleted"
+	// NotConfirmed is set when the last retraction was accepted by the
+	// provider but a read-back still found the value live: why, with what the
+	// provider still serves. Empty means no unconfirmed attempt, not success —
+	// a tombstone is only ever cleared by confirmation.
+	NotConfirmed string `json:"not_confirmed,omitempty"`
 }
 
 // DNSRecord is a statically-declared DNS record that hz publishes to the zone's
@@ -685,9 +1186,19 @@ type DNSTombstone struct {
 // TXT records used for SSL are at distinct names and are unaffected.
 type DNSRecord struct {
 	Name  string `json:"name"`          // FQDN ("foo.example.com"), zone apex (the zone name or "@"), or a label relative to the zone
-	Type  string `json:"type"`          // A, AAAA, CNAME, TXT
-	Value string `json:"value"`         // record value (e.g. "google-site-verification=...")
+	Type  string `json:"type"`          // A, AAAA, CNAME, TXT, MX
+	Value string `json:"value"`         // record value (e.g. "google-site-verification=...", MX "10 mail.example.com")
 	TTL   int    `json:"ttl,omitempty"` // seconds; defaults to 300
+	// Note says why the record exists ("SES DKIM for iodesystems.com"). A
+	// verification CNAME is an opaque token; six months on, nobody can tell
+	// which service asked for it, and a record nobody can explain is a record
+	// nobody dares remove.
+	Note string `json:"note,omitempty"`
+	// Instance is the hz instance this record is published FOR ("" = this
+	// hz's own declaration): the instance asked for it and it lies inside the
+	// instance's DNS grant (hz_instance_dns.go). Only that instance's request,
+	// or narrowing its grant, changes it — no admin record edit does.
+	Instance string `json:"instance,omitempty"`
 }
 
 // DNSDriftInfo records an out-of-band change detected at a DNS provider: the
@@ -728,7 +1239,9 @@ func (r DNSRecord) EffectiveTTL() int {
 	return 300
 }
 
-// Validate checks the record has the required fields.
+// Validate checks the record has the required fields and a value its type can
+// carry. Set-level rules (a CNAME has one value and no siblings) need every
+// record at the name and live in Zone.ValidateRecords.
 func (r DNSRecord) Validate() error {
 	if strings.TrimSpace(r.Name) == "" {
 		return errors.New("dns record requires a name")
@@ -739,7 +1252,7 @@ func (r DNSRecord) Validate() error {
 	if strings.TrimSpace(r.Value) == "" {
 		return fmt.Errorf("dns record %s (%s) requires a value", r.Name, r.NormalizedType())
 	}
-	return nil
+	return validateRecordValue(r.NormalizedType(), strings.TrimSpace(r.Value))
 }
 
 // GetDNSProvider returns the DNS provider config with zone name populated
@@ -762,7 +1275,16 @@ type ZoneSSL struct {
 
 // Service represents a unified service configuration with clear separation of concerns
 type Service struct {
-	Name        string       `json:"name"`                   // Human-readable, e.g., "grafana"
+	Name string `json:"name"` // Human-readable, e.g., "grafana"
+	// Project and Environment are the two axes a service already had, encoded in its
+	// hostname rather than declared: `beta.veliode.com` is project veliode, environment
+	// beta. Naming them makes "what is in staging" a query instead of a grep, and lets a
+	// service be joined to the config manager, whose addresses are environment/app/role.
+	//
+	// Both optional. A service that declares neither behaves exactly as before and is
+	// reported as unassigned, which is how an existing config keeps working untouched.
+	Project     string       `json:"project,omitempty"`
+	Environment string       `json:"environment,omitempty"`
 	Token       string       `json:"token,omitempty"`        // API token for service integration (ban, status)
 	Domains     []string     `json:"domains"`                // FQDNs, e.g., ["app.example.com", "book.example.com"]
 	InternalDNS *InternalDNS `json:"internal_dns,omitempty"` // dnsmasq config for VPN clients
@@ -935,15 +1457,29 @@ type ProxyConfig struct {
 	// HTTP/1.1, which is right for nearly everything. "h2" is cleartext
 	// HTTP/2 (h2c) by prior knowledge — HAProxy does not negotiate and does
 	// not fall back, so a backend that is not h2c fails outright. Set it only
-	// for a backend that requires HTTP/2, such as a gRPC service.
+	// for a backend that requires HTTP/2, such as a gRPC service. "https" is
+	// HTTP/1.1 over TLS, for a backend that serves only TLS — see
+	// BackendProtoHTTPS for what it does NOT check.
 	BackendProto string `json:"backend_proto,omitempty"`
 }
 
-// BackendProtoH2 is the only non-default value BackendProto accepts.
+// BackendProtoH2 is cleartext HTTP/2 (h2c) to the backend.
 const BackendProtoH2 = "h2"
 
+// BackendProtoHTTPS is HTTP/1.1 over TLS to the backend, for a device that
+// serves only HTTPS with a self-signed certificate (a KVM, a router UI).
+//
+// ⚠ The backend's certificate is NOT verified: HAProxy renders `ssl verify
+// none`, and hz's derived svc:* check skips verification the same way. The
+// link is encrypted but unauthenticated — anything that answers at the
+// backend address is trusted. Acceptable for a device on the LAN; never use it
+// for a backend reached across a network you do not control.
+const BackendProtoHTTPS = "https"
+
 // ValidBackendProto reports whether a backend_proto value is one hz knows.
-func ValidBackendProto(v string) bool { return v == "" || v == BackendProtoH2 }
+func ValidBackendProto(v string) bool {
+	return v == "" || v == BackendProtoH2 || v == BackendProtoHTTPS
+}
 
 // SelfBackendAddr returns the loopback address of this hz instance's own admin
 // UI, derived from ListenAddr. Used by services with proxy.self so HAProxy
@@ -955,6 +1491,55 @@ func (c *Config) SelfBackendAddr() string {
 		port = "8080"
 	}
 	return "127.0.0.1:" + port
+}
+
+// RoutesToHZ reports whether svc's traffic reaches this hz: a `self` service,
+// or a plain proxy whose backend is hz's own listener — the older shape (a
+// kiosk declared as `backend: localhost:8080`), which serves hz exactly as
+// `self` does. A backend reaches hz when its port is hz's listen port and its
+// host is an address that listener accepts: any loopback name or the LAN
+// address when hz binds every interface; loopback only when hz binds loopback;
+// exactly the bound address otherwise. Static and blue-green services never do.
+//
+// Used by the MFA jail (which host is the portal) and by hz doctor. Counting
+// only `self` jailed peers out of a kiosk declared the older way (403 instead
+// of the portal redirect, seen live 2026-11-06).
+func (c *Config) RoutesToHZ(svc *Service) bool {
+	if svc.Proxy == nil {
+		return false
+	}
+	if svc.Proxy.Self {
+		return true
+	}
+	if svc.Proxy.StaticRoot != "" || svc.Proxy.Deploy != nil {
+		return false
+	}
+	bHost, bPort, err := net.SplitHostPort(c.ServiceBackend(svc))
+	if err != nil {
+		return false
+	}
+	lHost, lPort, err := net.SplitHostPort(strings.TrimSpace(c.EffectiveListenAddr()))
+	if err != nil || lPort == "" {
+		lHost, lPort = "", "8080"
+	}
+	if bPort != lPort {
+		return false
+	}
+	loopbackHost := func(h string) bool {
+		if strings.EqualFold(h, "localhost") {
+			return true
+		}
+		ip := net.ParseIP(h)
+		return ip != nil && ip.IsLoopback()
+	}
+	switch {
+	case lHost == "" || lHost == "0.0.0.0" || lHost == "::":
+		return loopbackHost(bHost) || (c.LocalInterface != "" && bHost == c.LocalInterface)
+	case loopbackHost(lHost):
+		return loopbackHost(bHost)
+	default:
+		return bHost == lHost
+	}
 }
 
 // StaticServeAddr returns the loopback address hz binds to serve static-folder
@@ -985,7 +1570,7 @@ type DeployConfig struct {
 	NextBackend string `json:"next_backend"`          // Slot B address host:port (Slot A = ProxyConfig.Backend)
 	Token       string `json:"token"`                 // Per-service deploy token
 	ActiveSlot  string `json:"active_slot,omitempty"` // "a" or "b" — which slot is currently serving (default "a")
-	Balance     string `json:"balance,omitempty"`     // "first" (active/standby) or "roundrobin" (even). Default "first".
+	Balance     string `json:"balance,omitempty"`     // "first" (first listed server that is up serves; next is listed first) or "roundrobin" (even). Default "first".
 }
 
 // HealthCheck configures HAProxy health checks for a backend
@@ -1000,6 +1585,33 @@ type ServiceCheck struct {
 	Target   string `json:"target"`             // IP/hostname for ping, URL for http
 	Interval int    `json:"interval,omitempty"` // Check interval in seconds (default 300)
 	Enabled  bool   `json:"enabled"`            // Whether check is active (false = ignored)
+
+	// Project attributes a standalone check; "" is global. Never set on the
+	// svc:* checks the monitor derives from a service — those follow the
+	// service's own Project and are not stored.
+	Project string `json:"project,omitempty"`
+
+	// InsecureTLS is set only on the svc:* check of a service whose
+	// backend_proto is "https", and never stored: the probe then skips
+	// certificate verification, as HAProxy does for that backend
+	// (BackendProtoHTTPS). A configured check cannot set it, so an https://
+	// check an operator writes always verifies.
+	InsecureTLS bool `json:"-"`
+
+	// Slots is set only on the svc:* check of a blue-green service, and never
+	// stored. HAProxy serves such a service from whichever slot is healthy, so
+	// a check of one address reads "failed" on a service that works. With
+	// Slots, the monitor probes every slot with Type and reads ok if any
+	// answers. Target is then a description, not something to dial.
+	Slots []CheckSlot `json:"-"`
+}
+
+// CheckSlot is one blue-green slot as the monitor probes it.
+type CheckSlot struct {
+	Slot    string // "a" (ProxyConfig.Backend) or "b" (DeployConfig.NextBackend)
+	Current bool   // DeployConfig.ActiveSlot names this slot: it holds the current role
+	Addr    string // resolved host:port, for messages
+	Target  string // what the probe dials: Addr for ping, a URL for http
 }
 
 // RemoteProbe is an hz-probe agent hz polls for an outside-in view.
@@ -1038,6 +1650,16 @@ type RemoteProbe struct {
 	// public-CA verification. Pull only — a pushing agent is a client, and
 	// verifies hz's certificate rather than presenting one.
 	PinSHA256 string `json:"pin_sha256,omitempty"`
+
+	// NtfyURL is the ntfy topic the vantage alerts when it cannot report to
+	// hz, and NtfyToken the optional ntfy access token for it. Both are
+	// optional and both are secrets: write-only across the remotes API, and
+	// kept out of the pending diff. hz hands them to THIS vantage in its push
+	// reply (handleProbeReport) and to no one else; the vantage caches them,
+	// because the alert exists for the time hz is down. Push only — a pulled
+	// agent never dials hz, so it cannot see hz down.
+	NtfyURL   string `json:"ntfy_url,omitempty"`
+	NtfyToken string `json:"ntfy_token,omitempty"`
 }
 
 // Probe modes.
@@ -1073,15 +1695,6 @@ func (d *DeployConfig) InactiveServer(backend string) string {
 		return backend
 	}
 	return d.NextBackend
-}
-
-// Swap flips the active slot
-func (d *DeployConfig) Swap() {
-	if d.ActiveSlot == "b" {
-		d.ActiveSlot = "a"
-	} else {
-		d.ActiveSlot = "b"
-	}
 }
 
 // GenerateDeployToken creates a random 32-char hex token
@@ -1197,6 +1810,13 @@ func LoadFromJSON(data []byte) (*Config, error) {
 	if err := json.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parsing config: %w", err)
 	}
+	if err := cfg.MigrateLegacyBuilders(); err != nil {
+		return nil, fmt.Errorf("parsing config: %w", err)
+	}
+	if err := cfg.MigrateLegacyMachineHZ(); err != nil {
+		return nil, fmt.Errorf("parsing config: %w", err)
+	}
+	cfg.MigrateInstanceDNSGrants()
 	return cfg, nil
 }
 
@@ -1240,6 +1860,82 @@ func LoadAuto() (*Config, string, error) {
 }
 
 func Save(path string, cfg *Config) error {
+	// A config decoded without LoadFromJSON (a backup restore) still carries
+	// the pre-B3 `machines[].hz` marker, captured by UnmarshalJSON. It is
+	// migrated FIRST, before ValidateEnvironments reads an Upstream against
+	// the instances — the instance token in use keeps its digest.
+	if err := cfg.MigrateLegacyMachineHZ(); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	// Same reason: a restored config predating N4h has TLS domains and no
+	// DNS grant, which ValidateHZInstances below refuses.
+	cfg.MigrateInstanceDNSGrants()
+	// Refuse to write a config whose project tree does not hold together. Save is the
+	// one chokepoint every writer goes through, so a bad parent or a service naming a
+	// project that does not exist is caught here rather than surfacing later as an
+	// empty grouping that looks like "nothing is in that project".
+	if err := cfg.ValidateProjects(); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	// Same chokepoint, same reason: an environment naming a project that does not exist,
+	// or a service pointing at a rung nobody declared, reads later as an empty
+	// environment rather than a wrong one.
+	if err := cfg.ValidateEnvironments(); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	// Feeds are checked beside the tree, not inside it: the tree has to hold
+	// together before a feed can be resolved through it, and a half-declared
+	// feed reaches a machine as a sources entry that cannot fetch.
+	if err := cfg.ValidateFeeds(); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	// Machines, same chokepoint. A duplicate name would make two records answer
+	// to one agent credential, and a machine that bridges segments without a
+	// reason is the one thing architecture.md refuses to let pass silently —
+	// both are cheaper to refuse at the write than to explain from a screen.
+	if err := cfg.ValidateMachines(); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	// Segments, same chokepoint. Two of these checks cannot be made anywhere
+	// else and are silent when they fail: overlapping ranges give a machine in
+	// both two routes for one prefix and one of them wins, and two segments on
+	// one interface collide on the box rather than here. Both are cheaper to
+	// refuse at the write than to debug from a network that half works.
+	if err := cfg.ValidateSegments(); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	// Recovery recipients, same chokepoint. A recipient whose public key does
+	// not parse is a wrap that cannot be produced, and the moment that is
+	// discovered is the moment somebody is trying to recover — so it is refused
+	// at the write instead.
+	if err := cfg.ValidateRecoveryRecipients(); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	// Delegations, same chokepoint. A record, service domain or sub_zone below a
+	// delegated name is written to a zone no resolver reads for it — silent at
+	// the write, and the delegated zone's owner never sees it.
+	if err := cfg.ValidateDelegations(); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	// The nested-hz upstream, same chokepoint: a URL with no host or a rung
+	// listed twice is a puller that cannot start or two pullers for one cache.
+	if err := cfg.ValidateUpstream(); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	// Build agents, same chokepoint: an agent registered for a project nobody
+	// declared, or a name outside the charset, is refused at the write. A
+	// config decoded without LoadFromJSON (a backup restore) still carries the
+	// legacy `builders` key, so it is migrated here first.
+	if err := cfg.MigrateLegacyBuilders(); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	if err := cfg.ValidateBuildAgents(); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
+	// Hz instances, same chokepoint (migrated at the top of Save).
+	if err := cfg.ValidateHZInstances(); err != nil {
+		return fmt.Errorf("config: %w", err)
+	}
 	dir := filepath.Dir(path)
 	if dir != "." && dir != "" {
 		if err := os.MkdirAll(dir, 0755); err != nil {
@@ -1428,38 +2124,70 @@ func (c *Config) DeletePeerProfile(name string) {
 	}
 }
 
-// IsPeerMFAJailed returns true if MFA is enabled, the peer has no active session,
-// and the peer is not a VPN admin (admins bypass MFA).
+// PeerProject is the project a VPN client is attributed to; "" is global.
+func (c *Config) PeerProject(name string) string {
+	return c.VPNProjects[name]
+}
+
+// SetPeerProject attributes a VPN client, or with "" makes it global. The
+// name is not checked here — ValidateProjects checks it on Save, and a caller
+// that must refuse before a side effect (creating the wg0.conf peer) calls
+// CheckProjectRef first.
+//
+// COPY ON WRITE: a Config is copied shallowly by updateConfig, so writing into
+// the existing map would change the config another goroutine is serving.
+func (c *Config) SetPeerProject(name, project string) {
+	next := make(map[string]string, len(c.VPNProjects)+1)
+	for k, v := range c.VPNProjects {
+		next[k] = v
+	}
+	if project == "" {
+		delete(next, name)
+	} else {
+		next[name] = project
+	}
+	if len(next) == 0 {
+		next = nil
+	}
+	c.VPNProjects = next
+}
+
+// RenamePeerProject carries a client's attribution across a rename. Without it
+// a renamed client silently becomes global.
+func (c *Config) RenamePeerProject(oldName, newName string) {
+	p, ok := c.VPNProjects[oldName]
+	if !ok || oldName == newName {
+		return
+	}
+	c.SetPeerProject(oldName, "")
+	c.SetPeerProject(newName, p)
+}
+
+// DeletePeerProject clears a deleted client's attribution, so a later client
+// reusing the name does not inherit an owner nobody gave it.
+func (c *Config) DeletePeerProject(name string) {
+	if _, ok := c.VPNProjects[name]; ok {
+		c.SetPeerProject(name, "")
+	}
+}
+
+// CheckProjectRef refuses a non-empty project that is not declared, naming the
+// ones that are. "" is legal and means global. For handlers that must refuse
+// before a side effect Save cannot undo.
+func (c *Config) CheckProjectRef(project string) error {
+	if project == "" || c.hasProject(project) {
+		return nil
+	}
+	return fmt.Errorf("no project %q — attribute to a declared project, or leave it empty for global%s", project, c.projectHint())
+}
+
+// IsPeerMFAJailed reports whether a peer is MFA-jailed: MFA is on and
+// MFAExemption names no reason it is not.
 func (c *Config) IsPeerMFAJailed(name string) bool {
 	if !c.VPNMFAEnabled {
 		return false
 	}
-	// A live, time-limited exception. Honoured in both scopes — it is the only
-	// bypass "all" mode permits, and the only one an assessor can audit.
-	if c.HasActiveMFAException(name) {
-		return false
-	}
-	// VPN admins bypass MFA — unless scope is "all", where the whole point is
-	// that nobody has a standing bypass, admins least of all: they are the
-	// highest-privilege identities on the box.
-	if c.MFAScope() != MFAScopeAll {
-		for _, admin := range c.VPNAdmins {
-			if admin == name {
-				return false
-			}
-		}
-	}
-	if c.VPNMFASessions != nil {
-		if expiry, ok := c.VPNMFASessions[name]; ok {
-			if expiry == 0 { // forever
-				return false
-			}
-			if expiry > time.Now().Unix() {
-				return false
-			}
-		}
-	}
-	return true
+	return c.MFAExemption(name) == ""
 }
 
 // GetJailedPeers returns a set of peer names that are currently MFA-jailed.
@@ -1633,17 +2361,41 @@ func (r LocalDNSRecord) Normalized() LocalDNSRecord {
 }
 
 // Validate reports why a record cannot be served, or nil.
+//
+// IP must be a literal address: dnsmasq answers with one, so a name here would
+// have nothing to answer. A host reference ("@nas") is accepted as a SHAPE and
+// resolved before this runs — see Config.ResolveLocalDNSRecord, which is what
+// every caller with a config in hand uses.
 func (r LocalDNSRecord) Validate() error {
 	r = r.Normalized()
 	switch {
 	case r.Name == "":
 		return errors.New("name is required")
+	case IsHostRef(r.IP):
+		return fmt.Errorf("%q is an unresolved host reference; resolve it against the declared hosts before serving it", r.IP)
 	case net.ParseIP(r.IP) == nil:
 		return fmt.Errorf("%q is not an IP address; local records answer with an address, not another name", r.IP)
 	case strings.ContainsAny(r.Name, " 	/"):
 		return fmt.Errorf("%q is not a hostname", r.Name)
 	}
 	return nil
+}
+
+// ResolveLocalDNSRecord normalizes a record and resolves a host reference in
+// its IP, returning the record as it will be served.
+//
+// This is the form every consumer wants: the derive path calls it and drops
+// what it refuses, the write path calls it and reports what it refuses. A bare
+// record.Validate() only sees the shape, and a reference has the wrong shape by
+// construction.
+func (c *Config) ResolveLocalDNSRecord(r LocalDNSRecord) (LocalDNSRecord, error) {
+	r = r.Normalized()
+	ip, err := c.ResolveHostRef(r.IP)
+	if err != nil {
+		return r, err
+	}
+	r.IP = ip
+	return r, r.Validate()
 }
 
 // LocalDNSConflicts returns the local records that shadow a name hz already
@@ -1906,6 +2658,22 @@ func (c *Config) SetListenOverride(addr string) {
 // ListenOverride returns the start-option bind, or empty.
 func (c *Config) ListenOverride() string { return c.listenOverride }
 
+// SetNoVPNListen applies --no-vpn-listen for this run.
+func (c *Config) SetNoVPNListen(off bool) { c.noVPNListen = off }
+
+// NoVPNListen reports --no-vpn-listen.
+func (c *Config) NoVPNListen() bool { return c.noVPNListen }
+
+// VPNListenEnabled reports whether hz may add its VPN listener: on unless
+// vpn_listen is false or --no-vpn-listen was given. Whether one is actually
+// added also depends on the primary bind (server.vpnListenTarget).
+func (c *Config) VPNListenEnabled() bool {
+	if c.noVPNListen {
+		return false
+	}
+	return c.VPNListen == nil || *c.VPNListen
+}
+
 // EffectiveListenAddr is the address hz actually binds: the start option when
 // given, otherwise the configured one.
 //
@@ -1947,6 +2715,33 @@ func (c *Config) AdminBoundToLoopback() bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// AdminAccessEncrypted decides PCI DSS 2.2.7 for hz: is every way to reach hz's
+// plain-HTTP listener encrypted?
+//
+// Two paths count, and the operator decided the second (2026-09-29):
+//   - loopback: the only route in is HAProxy's TLS frontend; the cleartext
+//     hop never touches a network (AdminBoundToLoopback).
+//   - the WireGuard address: traffic arrives over wg0, encrypted by WireGuard
+//     (ChaCha20-Poly1305). The VPN listener binds ONLY this address — never
+//     0.0.0.0, pinned by TestTheVPNListenerNeverBindsEveryInterface — so it
+//     never makes this false; a primary bound to the WG address counts too.
+//
+// Anything else — every interface, or a LAN address — is a finding.
+func (c *Config) AdminAccessEncrypted(wgIP string) bool {
+	if c.AdminBoundToLoopback() {
+		return true
+	}
+	wgIP = strings.TrimSpace(wgIP)
+	if wgIP == "" {
+		return false
+	}
+	host, _, err := net.SplitHostPort(strings.TrimSpace(c.EffectiveListenAddr()))
+	if err != nil {
+		return false
+	}
+	return strings.Trim(strings.TrimSpace(host), "[]") == wgIP
 }
 
 // UsersDBPath is the configured identity store path, or the default.
@@ -1993,6 +2788,33 @@ const (
 	MFAScopeAdminsExempt = "admins-exempt" // default; VPN admins bypass the jail
 	MFAScopeAll          = "all"           // nobody is exempt, admins included
 )
+
+// DefaultMFADurations is the session-duration allowlist when the operator has
+// not set one.
+var DefaultMFADurations = []string{"2h", "4h", "8h", "forever"}
+
+// MFADurations is the session durations a peer may request: the operator's
+// list (or the default), without "forever" under scope "all" — a permanent
+// session is a standing bypass, and MFAExemption would not honour it. If
+// that leaves nothing (the operator allowed only "forever"), the default
+// list applies, so a person can still verify.
+func (c *Config) MFADurations() []string {
+	if out := c.mfaDurationsFrom(c.VPNMFADurations); len(out) > 0 {
+		return out
+	}
+	return c.mfaDurationsFrom(DefaultMFADurations)
+}
+
+func (c *Config) mfaDurationsFrom(allowed []string) []string {
+	out := make([]string, 0, len(allowed))
+	for _, d := range allowed {
+		if d == "forever" && c.MFAScope() == MFAScopeAll {
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
+}
 
 // MFAException is a time-limited bypass of the MFA jail for one peer.
 //
@@ -2195,8 +3017,107 @@ func (c *Config) PruneExpiredMFASessions() bool {
 	return pruned
 }
 
+// InfraClient tags a VPN client a machine that needs no MFA.
+type InfraClient struct {
+	Reason string `json:"reason"`           // why, for the audit trail; required
+	SetAt  int64  `json:"set_at,omitempty"` // unix seconds
+	SetBy  string `json:"set_by,omitempty"` // best-effort attribution
+}
+
+// SetInfraClient tags a client infra. Callers validate the reason and the
+// peer; this only stores what it is given.
+func (c *Config) SetInfraClient(name string, ic InfraClient) {
+	if c.VPNInfraClients == nil {
+		c.VPNInfraClients = make(map[string]InfraClient)
+	}
+	c.VPNInfraClients[name] = ic
+}
+
+// ClearInfraClient returns a client to "user". Returns false if it was not infra.
+func (c *Config) ClearInfraClient(name string) bool {
+	if _, ok := c.VPNInfraClients[name]; !ok {
+		return false
+	}
+	delete(c.VPNInfraClients, name)
+	return true
+}
+
+// IsInfraClient reports whether a client is tagged infra (whether or not the
+// tag is currently honoured — see MFAExemption).
+func (c *Config) IsInfraClient(name string) bool {
+	_, ok := c.VPNInfraClients[name]
+	return ok
+}
+
+// MFA exemption reasons, as MFAExemption reports them.
+const (
+	MFAExemptUpstream       = "upstream"        // a nested hz's client: hz's API only
+	MFAExemptInfra          = "infra"           // a client tagged infra (VPNInfraClients)
+	MFAExemptException      = "exception"       // a live, time-limited MFAException
+	MFAExemptAdmin          = "admin"           // a VPN admin, scope admins-exempt only
+	MFAExemptSessionForever = "session-forever" // a person passed MFA and chose "forever"
+	MFAExemptSession        = "session"         // a person passed MFA; the session is live
+)
+
+// MFAExemption reports why a peer is NOT jailed, or "" when it is (or when
+// MFA is off, where nothing is jailed and nothing is exempt). The ONE place the
+// jail is decided: IsPeerMFAJailed is its negation, and the report of VPN
+// clients without MFA reads the same answers, so the two cannot disagree.
+func (c *Config) MFAExemption(name string) string {
+	// An upstream client is never jailed: it can reach only hz's API
+	// (ProfileUpstream's rules), which authenticates it by enrolment, so MFA
+	// would protect nothing it can reach — and a jailed machine has no person
+	// to answer the prompt. Exempted here, where the jail set is built, so the
+	// rules, the HAProxy ACL and the jailed-peer count all agree.
+	if c.GetPeerProfile(name) == ProfileUpstream {
+		return MFAExemptUpstream
+	}
+	// An infra client: a machine, vpn-only. Honoured in both scopes for the
+	// upstream client's reason. A tag on a client whose profile has since
+	// changed is NOT honoured — an MFA-free machine with LAN access or a full
+	// tunnel is a different risk than the one that was tagged.
+	if c.IsInfraClient(name) && c.GetPeerProfile(name) == ProfileVPNOnly {
+		return MFAExemptInfra
+	}
+	// A live, time-limited exception. Honoured in both scopes.
+	if c.HasActiveMFAException(name) {
+		return MFAExemptException
+	}
+	// VPN admins bypass MFA — unless scope is "all", where the whole point is
+	// that nobody has a standing bypass, admins least of all: they are the
+	// highest-privilege identities on the box.
+	if c.MFAScope() != MFAScopeAll {
+		for _, admin := range c.VPNAdmins {
+			if admin == name {
+				return MFAExemptAdmin
+			}
+		}
+	}
+	if c.VPNMFASessions != nil {
+		if expiry, ok := c.VPNMFASessions[name]; ok {
+			// "forever" is a standing bypass for a person, which is what
+			// scope "all" exists to remove: not honoured there. The person
+			// verifies again and gets a time-limited session.
+			if expiry == 0 {
+				if c.MFAScope() == MFAScopeAll {
+					return ""
+				}
+				return MFAExemptSessionForever
+			}
+			if expiry > time.Now().Unix() {
+				return MFAExemptSession
+			}
+		}
+	}
+	return ""
+}
+
 // RenameMFAPeer updates MFA maps when a peer is renamed.
 func (c *Config) RenameMFAPeer(oldName, newName string) {
+	if ic, ok := c.VPNInfraClients[oldName]; ok {
+		delete(c.VPNInfraClients, oldName)
+		c.VPNInfraClients[newName] = ic
+	}
 	if c.VPNMFASecrets != nil {
 		if s, ok := c.VPNMFASecrets[oldName]; ok {
 			delete(c.VPNMFASecrets, oldName)
@@ -2228,6 +3149,7 @@ func (c *Config) DeleteMFAPeer(name string) {
 	c.ClearMFASecret(name)
 	c.ClearPasskeys(name)
 	c.RevokeMFAException(name)
+	c.ClearInfraClient(name)
 }
 
 // GetAllowedIPsForProfile returns client-side AllowedIPs for a routing profile
@@ -2240,6 +3162,12 @@ func (c *Config) GetAllowedIPsForProfile(profile string) string {
 			return c.VPNRange
 		}
 		return "10.100.0.0/24"
+	case ProfileUpstream:
+		// The gateway's own WG address and nothing else. The server renders
+		// an upstream config from the LIVE wg0 address instead
+		// (wireguard.GenerateUpstreamClientConfig), the same address the
+		// rules admit; this is the answer when only the config is at hand.
+		return c.GetWGGatewayIP() + "/32"
 	default:
 		return c.GetAllowedIPs()
 	}
@@ -2263,6 +3191,12 @@ func Template() string {
 {
   // HTTP server listen address
   "listen_addr": ":8080",
+
+  // When listen_addr is a specific address (e.g. 127.0.0.1:8080), hz also
+  // listens on the gateway's WireGuard address at the same port, so a nested
+  // hz can reach it over its upstream VPN client. Never on every interface.
+  // Default true; --no-vpn-listen turns it off for one run.
+  "vpn_listen": true,
 
   // Public URL of this kiosk (for invite QR codes)
   "kiosk_url": "https://vpn.example.com",
@@ -2477,6 +3411,16 @@ RestartSec=5
 User=root
 Group=root
 
+# NotifyAccess=main with Type=simple: hz is "active" the moment it is serving
+# (which is what we want — it keeps serving even when every subsystem is down,
+# because it is the tool you fix them with), but it also sends STATUS= so
+# "systemctl status homelab-horizon" says WHICH subsystems are down. Without
+# this line systemd discards the notification and the box reports a clean
+# "active" while WireGuard, dnsmasq and HAProxy have all failed. Not
+# Type=notify: that would block the boot behind a readiness hz deliberately
+# does not gate on. See internal/server/sdnotify.go.
+NotifyAccess=main
+
 # StateDirectory creates /var/lib/homelab-horizon, sets its ownership, and adds
 # it to ReadWritePaths implicitly — which the ReadWritePaths entry below cannot
 # do on its own, because a dash-prefixed path that does not exist is skipped
@@ -2485,11 +3429,24 @@ Group=root
 # serving. Declaring it here is systemd's own answer and removes the mkdir that
 # was papering over it.
 StateDirectory=homelab-horizon
-# 0750, not systemd's 0755 default: db.Open creates this directory 0750 itself,
-# and letting the unit widen it would have made the identity store's directory
+# 0751, and every digit is load-bearing.
+#
+# NOT systemd's 0755 default: db.Open creates this directory 0750 itself, and
+# letting the unit widen it would have made the identity store's directory
 # world-listable on every install. The database file is 0600 regardless, but the
-# directory listing is not nothing.
-StateDirectoryMode=0750
+# directory listing is not nothing. That is what this mode defends and it still
+# does: o+r is absent, so the directory cannot be LISTED.
+#
+# NOT 0750 either, which is what it was until 2026-09-25. The static file server
+# runs as a separate unprivileged identity and its roots live under here
+# (StaticWebDir). Without o+x that identity cannot TRAVERSE to a known path, so
+# every hz-managed static site answered 500 — measured on the gateway, where two
+# public sites had been doing so for six days while the process logged
+# "static: cannot open root" and nothing escalated it.
+#
+# o+x without o+r is exactly the difference: reach a path you already know,
+# never enumerate what is here.
+StateDirectoryMode=0751
 
 # File system isolation. /var/lib/homelab-horizon holds static-site releases
 # (the only writable, non-sensitive place for served files under the sandbox).

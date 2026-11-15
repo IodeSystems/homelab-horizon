@@ -1,0 +1,307 @@
+# homelab-horizon — the invariants
+
+hz is a **registry you consult**, not a control plane you are on call for. One
+person cannot be on call for their own orchestrator; every rule below follows
+from that.
+
+Code map: `AGENTS.md`. Work queue and release: `plan/plan.md`. Design detail:
+`plan/design/`. **This file is the constitution** — extracted 2026-09-24 from
+doc prose and Go doc comments, because every agent working here had to be told
+it in a prompt. Each rule states where it is enforced; **an invariant with no
+enforcement point says so**, and that is a finding, not a formality.
+
+---
+
+## 1 · hz declares and observes. Agents pull and apply locally.
+
+hz never reaches into a machine. `internal/agent/source.go:15-56` — *"THE AGENT
+POLLS. hz NEVER INITIATES."* Transport is a conditional GET whose ETag **is** the
+payload's content hash (`Desired.Fingerprint`), so an in-sync fleet costs a 304
+and there is no generation counter to keep correct across restarts.
+
+Why: hz holds no inbound credential, needs no route to a box, and works behind
+NAT. A report back (`POST /api/v1/agent/observed`) is the *same* direction.
+
+⚠ **Enforced structurally, by absence — no test pins the direction.** No SSH
+client in `go.mod`; nothing in `internal/server` writes to a remote box.
+Honest exceptions: `bin/deploy` (the operator's bootstrap — it ships the
+binary), and `internal/monitor/remote.go` (reads remote vantages). hz reaches
+off-box to **read**; it has never *executed* on a box it is not.
+
+## 2 · Empty and unknown are different states.
+
+The founding bug: an empty `BACKUP_BUCKET` selecting the production bucket,
+because absent and empty were indistinguishable.
+
+`projection.Gap` (`internal/projection/projection.go:339-354`, reasons
+`Unmodelled` / `Unreadable` / `StoodDown`); `MachineConfig.Unresolved` (`:155-162`
+— *"an empty section with a gap is hz saying 'I have no opinion'"*);
+`Segment.Resolved` (`:167-210`). UI: `readSegment`
+(`ui/src/components/model/model.ts:167-201`) refuses to render a blank field for
+an unresolved membership.
+Enforced: `internal/projection/segments_test.go:276`, `:316`;
+`ui/src/components/model/model.selftest.ts:161`.
+
+## 3 · Two channels. The agent never holds an environment key.
+
+```
+hz → agent   machine config   network, units, desired version   non-secret
+hz → app     sealed config    (project, env, app, role)         the APP holds the key
+```
+
+`internal/agent/desired.go:97-165` — the type **has no field** for a key or a
+decrypted value. `projection.Unit.ConfigGeneration` (`projection.go:317-337`) is
+a sha256 digest, which is how a blessed config triggers a restart without
+disclosing itself. `internal/server/handlers_configmgr.go` never constructs an
+`*ecdh.PrivateKey` and never calls `Open`/`UnwrapEnvKey` — it parses public keys
+only (`:147,735,791`).
+
+⚠ **Unrepresentable-by-type, not test-pinned** in the hz→agent direction;
+`internal/agent/observed_test.go:56` pins the reverse.
+
+**Qualification — cert material and `wg0.conf` DO cross**, `Secret` forced by
+`Desired.files()` and never trusted from the wire. An environment key decrypts
+a whole rung's secrets; a TLS server key authenticates one hostname at one
+machine's own edge. The **ACME account key and the DNS provider credentials
+never cross** — the agent receives *issued* material, not the power to issue.
+(`plan/design/architecture.md`, "Cert material and the two channels".)
+
+## 4 · hz holds no private key — for the config manager. Not an absolute.
+
+`internal/config/segment.go:47-51` — *"NO PRIVATE KEY, ever."* Machine keys are
+minted client-side (`configmgr/crypto.go:283`), segment keys on the box
+(`internal/agent/segmentkey.go:112`), and `wrapped_env_key` is a BLOB marked
+*"Opaque to hz"* (migration `0013:141-143`).
+
+⚠ **Where hz does hold one, say so rather than overclaiming:** the ACME account
+key (`internal/acme/acme.go:28-41`), issued TLS private keys
+(`internal/letsencrypt/apply.go:153`), and — in the admin-side human-VPN paths
+(add a client, rekey, `homelab-horizon vpn add`) — both halves of a client's
+WireGuard key, momentarily, to render a config and a QR code
+(`internal/server/handlers_api_vpn.go:78,122`, rekey `:631,672`).
+
+**The VPN invite path holds none** (N4i, 2026-10-07): the invitee's browser
+generates the keypair (`ui/src/components/invite/keygen.ts`) and hz receives
+the public key only (`internal/server/invites.go`, redeem). The old invite page
+that generated the key on the server is removed, with no fallback. Enforced:
+`internal/server/invites_test.go` `TestNoInviteTypeCarriesAPrivateKey` (exact
+field lists of every invite request, response and stored record) and
+`TestInviteRedeemUsesExactlyTheSubmittedKey`.
+
+Since N4f (2026-10-03) hz also issues a **dedicated certificate per hz instance** and
+hands its private key to that instance over HTTP, authenticated by the instance
+token and scoped to that instance only (`internal/server/handlers_api_apply.go:48`). It is issued material for that
+instance's own names (#3); the office's shared certificates and the ACME account
+key never cross.
+
+## 5 · Nothing in the boot path may depend on freshness.
+
+Services here run unattended for years. This has killed at least two proposals
+(leases, TUF-style expiry) — `plan/design/config-manager.md:52-92`.
+
+`configmgr/client.go:360,388-392`: on anything but `ErrDenied`, boot from
+last-known-good cache and log `LOUD`. `configmgr/state.go:56-59` — *"A
+three-year-old cache is valid config."* Rollback is caught by a **monotonic
+sequence floor, never a clock**.
+Enforced: `configmgr/client_test.go:443 TestCachedBootIsLoud`, `:693
+TestCacheNeverGoesStale` (backdates the cache 3 years with `os.Chtimes`),
+`:470 TestNoCacheAndNoAnswer`, `:487 TestSequenceFloor`.
+
+## 6 · A machine carries no environment.
+
+An environment is a coordinate of an **instance**, never of a box.
+`config.Machine` is exactly `{Name, Project, Segments, Note}`
+(`internal/config/machine.go:49-83`). A nested hz is NOT on it: since B3
+(2026-10-02) it is its own record, `config.HZInstance`
+(`internal/config/hz_instance.go:35`), and `Environment.Upstream` names an
+instance, never a machine. Enforced:
+`internal/config/machine_test.go:32 TestAMachineCarriesNoEnvironment` (the
+exact field list, and no environment field under any spelling), `:63`.
+
+**A machine MAY name an owning project — responsibility, not placement.**
+Amended 2026-09-26 (`plan/design/ui.md`, Decision 1 amendment 6). `""` is
+global. A machine owned by one project may host instances of others, and those
+read as crossings. A named owner must be declared (`internal/config/config.go:755-765`,
+enforced `internal/config/attribution_test.go:34`); removing the project
+re-attributes the machine to global, never deletes it (`attribution_test.go:197`).
+Attribution changes no rendered artifact and no projection:
+`internal/server/attribution_render_test.go:251 TestAttributionChangesNoRenderedArtifact`.
+
+❓ **Live contradiction, unsettled, the operator's call:** `Segment.Project` is
+REQUIRED (`internal/config/segment.go:69-75`, enforced `:249` and `:456`) while
+`plan/design/example-projection.md:114` asserts `seg:people` has none. Both
+cannot be true. It blocks "the VPN becomes a segment row".
+
+## 7 · Declare, then enrol. A box cannot declare itself.
+
+Enrolment **refuses an undeclared machine** (`handlers_api_machines.go:309-319`)
+— a box that could declare itself could write itself into the model and then ask
+for a credential, inverting the trust direction. `AddMachine` has exactly one
+production caller (`:120`).
+
+`hz machine add --self` is resolved **server-side** (`:63-69,92-99`): hz runs
+where the gateway is, so a client filling in its own hostname would declare the
+operator's laptop. Enforced: `handlers_api_machines_test.go:153`, `:333`;
+`cmd/hz-agent/enroll_test.go:196`; and `cmd/hz-agent/selfname_test.go:28`, which
+asks hz and the agent for their *real* hostnames and asserts both are the
+kernel's — so agreeing on `"unknown"` also fails.
+
+## 8 · Derived, not stored.
+
+A stored derivation is a second answer free to disagree with the thing it is a
+view of. WireGuard `Peers` derive from hub/spoke (`Segment.PeersOf`,
+`internal/config/segment.go:195-210`); `AllowedIPs` derives from CIDR.
+`SegmentMember` has **no such field**, so storing one is unrepresentable.
+Enforced: `segment_test.go:617
+TestMovingTheHubRewiresEveryPeerSetAndSaysSo` — *"the report is not a second
+answer"*.
+
+⚠ **False for the legacy human-VPN path**, which does store them:
+`Config.WGPeers` (`internal/config/config.go:507`) and `WGPeer.AllowedIPs`
+(`:650-657`), snapshotted from `wg0.conf` so HA peer-sync can replicate it.
+Different subsystem; `architecture.md`'s own "Not true yet" table admits it.
+
+## 9 · Posture is ordered, and the order is not the name.
+
+`PostureRank` (`internal/config/config.go:792-806`) is the only legal
+comparison. String order sorts `dev < prod < staging`, which would read a
+promotion to prod as a **demotion**. Gate: `CheckPromotion` (`:960-978`).
+Enforced: `environments_test.go:190`, `promotion_test.go:63`.
+
+⚠ **Convention, not type.** `Posture` is a plain `string`; nothing stops
+`a.Posture < b.Posture`. No non-test code does it today. Route every comparison
+through `PostureRank`.
+
+## 10 · A crossing is a declared exception with a reason.
+
+*A reason nobody is obliged to give is a reason nobody gives.* A multi-homed
+machine is **refused without a `Note`** (`internal/config/machine.go:70-78`,
+enforced `:202-205` and `:260-263`; `machine_test.go:120`,
+`handlers_api_machines_test.go:99`), and a segment must name its owning project
+(`segment.go:457`) — the owner is what makes another project's machine on it
+read as a crossing.
+
+⚠ **The traffic half is designed, not built.** `projection.Forward{From, To,
+Reason}` (`projection.go:265-276`) has no producer; `MachineConfig.Forwards` is
+hardcoded `[]Forward{}` (`:570`). Deny-by-default between a machine's own
+interfaces is what is live. Do not cite this invariant as one finished
+mechanism.
+
+## 11 · First sighting adopts, never acts.
+
+The rule that stops a fleet-wide bounce the first time config generations
+appear. `internal/agent/plan.go:250-251` puts an unseen unit in a separate
+`Adopted` list, never `Restarts` (`:253`). `GenerationStore.Load` returns an
+empty record with **no error** on first run (`generations.go:76-79,100-118`) —
+and unreadable is NOT missing (`:110-116`). Enforced:
+`config_restart_test.go:99`, `:126`, `:145`.
+
+## 12 · The pure/privileged seam: decide in `plan.go`, act in `apply.go`.
+
+`internal/agent/seam_test.go:34 TestPureHalfStaysPure` parses the pure files
+with `go/parser` and fails on an import of `os`, `os/exec`, `net`, `net/http`,
+`time`, `math/rand`, `crypto/rand` or `path/filepath`; `:63
+TestPureHalfCannotApply` walks every `ast.CallExpr` for `Apply` /
+`writeIfChanged` / `Observe`. The same guard sits in `internal/`{`haproxy`,
+`dnsmasq`, `iptables`, `wireguard`, `letsencrypt`, `acme`, `projection`}.
+
+`wireguard`'s and `acme`'s are **stricter and had to be** — they check
+*selectors*, because those renderers genuinely need `net.ParseCIDR` and
+`time.Unix` while `net.LookupHost` and `time.Now` must stay out, and an
+import-only rule would have to allow all of `net`.
+
+## 13 · Three properties bound any privileged verb.
+
+Rescued from the deleted `privilege-classification.md` §5.2 — state them as a
+rule, because `systemdRun` shows how fast a general-purpose root helper appears:
+
+1. **Never a shell string.** A verb takes typed arguments or nothing.
+2. **Never a subcommand from a request.** A privileged executor whose *verb* is
+   caller-controlled cannot be narrowed by validation.
+3. **Never reachable from the web process.** Not by exec, socket or
+   `systemd-run`. If hz web can trigger it, it is hz web's privilege regardless
+   of which uid holds it.
+
+## 14 · A rule nothing checks is a comment.
+
+Make it structural. 1750 test functions; these are the ones that fail the build
+when a *rule* breaks rather than a behaviour:
+
+| Guard | Makes impossible |
+|---|---|
+| `internal/server/handlers_api_model_test.go:32` (bidirectional wire mirror) | a field on `projection.MachineConfig` missing from `apitypes.MachineProjectionResp`, either way |
+| `configmgr/project_binding_test.go:38 TestCrossProjectReadIsRefused` | a value sealed at one project's address opening at another's, same key |
+| `cmd/hz-agent/selfname_test.go:28` | hz's declared name and the agent's enrolment name diverging |
+| `cmd/hz/config_alias_test.go:45,66,89` | `hz config` and the deprecated `hz cm` alias diverging |
+| `internal/server/handlers_api_assign_test.go:209` | a placement-free edit silently unassigning a service |
+| `internal/server/hz_client_script_test.go:13` | `bin/hz-client` drifting from its embedded copy |
+| `internal/server/attribution_render_test.go:251 TestAttributionChangesNoRenderedArtifact` | a project attribution (machine, VPN client, check, ban, port exclusion) changing any rendered artifact or machine projection |
+| `internal/agent/ownership.go` + `TestRemovalIsImpossibleOutsideAClaimedDirectory` | the agent deleting outside a claimed directory — the bound is re-asked immediately before each unlink, never trusted from the plan |
+
+## 15 · Validate the instrument before trusting silence.
+
+**An empty grep, an empty query or a zero count is a claim about the TOOL.**
+This repo was burned five times in one day: a `sqlite3` that was not installed,
+a `sudo` failing into `/dev/null`, a `pkill` pattern that never matched, a
+`curl` against the wrong URL path, and a backup that passed `integrity_check`
+while missing three migrations in the WAL.
+
+Positive-control it. The house example is the project-coordinate flag day
+(`plan/done.md`): the cross-project read was measured **succeeding** against the
+old binding *before any code changed*, so `TestCrossProjectReadIsRefused` proves
+a change rather than a tautology.
+
+Corollary, same file: **an address assembled field by field goes silently
+short** when the struct gains a field — every field is a `string` and the zero
+value is legal. An audit that greps for the **type** name finds those sites; one
+that greps for the field names does not.
+
+---
+
+## The kinds of node — never fold one into another
+
+Set by the operator, 2026-10-02: *"we have 4 kinds of external nodes: Vantage,
+Hz Instance, Hz Node (part of an instance), and Build Machine"*, refined the
+same day to **build agent**: *"a single machine may have multiple registered
+project build agents"*. Plus the
+machine hz manages. Each has its own record, its own credential and its own
+page. Folding one into `Machine` is the mistake this list exists to stop: a
+builder declared as a machine read as a project owning the box.
+
+| Kind | What it is | Credential | Record | Page |
+|---|---|---|---|---|
+| **Machine** | a box hz projects network and units ONTO; the agent's target | agent enrolment | `config.Machine` | Machines |
+| **Vantage** | an outside probe that pushes check results in | probe token | remotes | Checks |
+| **Hz Instance** | a nested hz with its OWN config (e.g. redline-loadtest) | instance token `hzi_` + an `upstream` VPN client | `config.HZInstance{Name, Project, URL, VPNClient, TokenSHA256, Note, Domain, Domains, DNSGrant}` (`hz_instances`); `Environment.Upstream` names one. `Domain` (N4j) is its ONE registered domain: with it, `Domains` = `<domain>`, `kiosk.hz.<domain>`, `hz.<domain>` and `DNSGrant` = `<domain>`, `*.<domain>` are DERIVED (`TLSDomains()`, `Grant()`, `internal/config/hz_instance_domain.go`), never stored, and an explicit one that disagrees is refused (#8); `hz.<domain>` is VPN-only — never published or requested. Without a `Domain` both stay explicit. The grant bounds what the parent publishes DNS for when the instance asks (`POST /api/v1/hz-instances/<name>/dns`); the records it owns are zone records with `DNSRecord.Instance` (`internal/config/hz_instance_dns.go`) | Instances, the owning project's page — never Machines |
+| **Hz Node** | a cluster member of ONE instance (HA peer); no config of its own | HA join / peer sync | the HA peer list | Settings › HA |
+| **Build Agent** | a registration that numbers, logs and uploads builds for ONE project; several may run on one host (a label, not a machine) | agent token `hzb_` | `config.BuildAgent{Name, Project, Host, Note, TokenSHA256}` (`build_agents`) | Settings, Builds |
+
+Enforced, by exact field list: `internal/config/machine_test.go:32`,
+`internal/config/hz_instance_test.go:14 TestAnHZInstanceIsItsOwnRecord`,
+`internal/config/build_agent_test.go:22 TestABuildAgentCarriesNoMachine`; and
+on the wire and the screen: `internal/server/handlers_api_nested_test.go:46`
+(an hz instance is absent from `/api/v1/machines`),
+`ui/src/components/machines.render.selftest.tsx` ("an hz instance is not a
+machine", "a build agent is not a machine").
+
+## The one authority — know this before designing any gate
+
+`RoleAdmin` is the **only** role (`internal/db/users.go:23,29,70-71`: *"hz has
+exactly one privilege level"*), and API tokens have **no scope field**
+(`internal/db/api_tokens.go:34-45`). `cmApprove`
+(`internal/server/handlers_configmgr.go:756`) needs only a signed-in user; there
+is no second-approver check and none is possible.
+
+So **every promotion or approval gate gates one authority against itself**, and
+*"intern opens, senior blesses"* has no representation at all. This is a
+decision, not a build — see `plan/plan.md` Tier 1. Do not add another gate
+before it is settled.
+
+## House rules
+
+- Status marks: ◻ todo · ◐ in progress · ✅ done · ⏸ parked · ❓ blocked · ⚠ caveat.
+- Every "today" claim about the code carries a `file:line`, checked not recalled.
+- **The icebox is what the next release EXCLUDES**, by definition — not a "later" pile.
+- Maintain the plan in the same pass as the work. A stale plan is worse than none.
+- A refactor claiming byte-identical output must not also change behaviour; what
+  it finds goes to `plan/icebox.md` with the evidence, not into the diff.

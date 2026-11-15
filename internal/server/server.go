@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bufio"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -14,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -22,13 +22,18 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/iodesystems/homelab-horizon/internal/agent"
+	"github.com/iodesystems/homelab-horizon/internal/apitypes"
+	"github.com/iodesystems/homelab-horizon/internal/autoheal"
 	"github.com/iodesystems/homelab-horizon/internal/config"
 	"github.com/iodesystems/homelab-horizon/internal/db"
+	"github.com/iodesystems/homelab-horizon/internal/dns"
 	"github.com/iodesystems/homelab-horizon/internal/dnsmasq"
 	"github.com/iodesystems/homelab-horizon/internal/haproxy"
 	"github.com/iodesystems/homelab-horizon/internal/integration"
 	"github.com/iodesystems/homelab-horizon/internal/letsencrypt"
 	"github.com/iodesystems/homelab-horizon/internal/monitor"
+	"github.com/iodesystems/homelab-horizon/internal/nested"
 	"github.com/iodesystems/homelab-horizon/internal/route53"
 	"github.com/iodesystems/homelab-horizon/internal/system"
 	"github.com/iodesystems/homelab-horizon/internal/wireguard"
@@ -197,6 +202,7 @@ type peerSyncStatus struct {
 }
 
 type Server struct {
+	sslTests sslTestGate // POST /api/v1/ssl/test-issue, one per zone per cooldown
 	// config is swapped atomically by applyNewConfig (peer-sync pull loop).
 	// Always access via s.cfg() — never read the field directly outside the
 	// few helpers below. In-place mutation of the pointed-to Config is still
@@ -204,6 +210,11 @@ type Server struct {
 	// separately and out of scope for this refactor.
 	config         atomic.Pointer[config.Config]
 	peerSyncStatus peerSyncStatus
+
+	// The last thing announceAgentGuard said about hz-agent vs HA peer-sync,
+	// so a refusal recomputed on every five-second poll is logged when it
+	// changes rather than every time. See agent_fleet_guard.go.
+	agentGuardSaid atomic.Pointer[string]
 
 	// Per-peer traffic samples behind the VPN inactivity timeout. Not in the
 	// config: a measurement rather than a setting. See peer_activity.go.
@@ -215,7 +226,58 @@ type Server struct {
 	reconcileMu         sync.Mutex
 	lastRecordReconcile time.Time
 
-	configPath    string
+	configPath string
+
+	// newDNSProvider builds the provider client for a zone. Nil means
+	// dns.NewProvider; a test sets it to hand the record handlers a fake, since
+	// they otherwise build a real Route53 client from the zone's config.
+	newDNSProvider func(*config.DNSProviderConfig) (dns.Provider, error)
+
+	// unitDir is where the agent payload says a systemd unit hz DECLARES
+	// belongs. hz never writes into it — the agent does, once it is armed.
+	//
+	// A field rather than a constant because the tests that apply hz's payload
+	// with the real agent would otherwise write /etc/systemd/system on the
+	// machine running them. Empty means the default (static_unit.go).
+	unitDir string
+
+	// sysctlDir and ipForwardPath are the two paths hz's forwarding
+	// declaration names (ipforward.go). Fields for the same reason unitDir is
+	// one: a test that applies hz's payload with the real agent would
+	// otherwise rewrite /etc/sysctl.d and set the kernel's forwarding flag on
+	// the machine running the suite. Empty means the real ones.
+	sysctlDir     string
+	ipForwardPath string
+
+	// journaldDir is the drop-in directory hz's log-retention declaration
+	// names (logretention.go). A field for the same reason the two above are:
+	// a test that applies hz's payload with the real agent would otherwise
+	// rewrite /etc/systemd/journald.conf.d and restart the journal of the
+	// machine running the suite. Empty means the real one.
+	journaldDir string
+
+	// egressIface overrides the default-route read for tests. nil means the
+	// real one, config.DetectDefaultInterface.
+	//
+	// A field rather than a parameter because THREE places have to agree about
+	// which interface this box routes through — hz's own reconciler, the rule
+	// sets it serves, and the wg0.conf it declares (wg_masquerade.go). A test
+	// that could not pin it could only assert the heal against whatever
+	// interface the machine running the suite happens to have.
+	//
+	// A POINTER, NOT A STRING, because the empty answer is a real answer.
+	// "there is no default route" is the state both stand-downs fire on, and a
+	// plain string could not tell it from "no override" — so that case would
+	// be testable only on a machine that happens to have no route, i.e. never
+	// on a developer's box and unpredictably on a runner.
+	egressIface *string
+
+	// vpnLn is the second listener on the gateway's WG address
+	// (vpn_listener.go); nil until Run starts serving. vpnListen overrides its
+	// bind for tests; nil means listenFreebind.
+	vpnLn     atomic.Pointer[vpnListener]
+	vpnListen func(network, addr string) (net.Listener, error)
+
 	adminToken    string
 	csrfSecret    string
 	dryRun        bool
@@ -240,11 +302,25 @@ type Server struct {
 	promHandler   http.Handler          // hz's own /metrics exposition
 	hostFacts     hostFacts             // cached clock + patch state (see hostfacts.go)
 
+	// subsystems is what startup actually achieved for WireGuard, dnsmasq and
+	// HAProxy. hz keeps serving whatever it says; it just stops claiming to be
+	// healthy. See startup_plan.go.
+	subsystems *subsystemReport
+
 	exporterMu     sync.RWMutex             // guards exporterStatus
 	exporterStatus map[string]exporterProbe // job|address -> resolved live path + liveness (status only, not a serving gate)
+	exporterSeen   map[string]bool          // job|address -> a probe has seen exposition there (service-mode serving gate)
 
 	configSharesMu sync.Mutex
-	configShares   map[string]*configShare // token -> share
+
+	// invitesMu serialises every read-modify-write of InvitesFile, which is
+	// what makes an invite single use (invites.go).
+	invitesMu sync.Mutex
+
+	// peerApply replaces the wg reload + chain rebuild after an invite adds a
+	// peer. Tests only; nil is the real one.
+	peerApply    func()
+	configShares map[string]*configShare // token -> share
 
 	// installGrants makes the client-binary downloads redeemable rather than
 	// anonymous: a token hz minted for an install command stays valid for an
@@ -260,6 +336,64 @@ type Server struct {
 	// list to keep in sync.
 	peerInstancePaths    map[string]bool
 	peerInstancePrefixes []string
+
+	// peerAPIRoutes records every route registered behind peerOnlyMiddleware
+	// (subtrees keep their trailing slash). Populated only by
+	// registerPeerAPI, then read-only. Its purpose is to let the access
+	// control test enumerate the surface instead of hand-listing it, so a
+	// route added to registerPeerAPI is covered without touching the test.
+	peerAPIRoutes []string
+
+	// artifactDir is the parent's artifact store, <data dir>/artifacts (N4a,
+	// handlers_api_artifacts.go). "" is no store: dry-run, and tests that
+	// do not set one. artifactMu serialises retention.
+	artifactDir string
+	artifactMu  sync.Mutex
+	// buildDir holds build logs, <data dir>/builds/<project>/<number>.log
+	// (handlers_api_builds.go). "" is no log store. buildLogMu serialises
+	// appends, so the cap is checked and written as one step.
+	buildDir   string
+	buildLogMu sync.Mutex
+
+	// child is set when config.json has an upstream block: this hz is nested
+	// for those rungs and serves them from its cache (handlers_nested.go).
+	child *nested.Child
+
+	// instanceCerts is what this process knows of the certificates it issues
+	// for nested hz instances (instance_tls.go): the last issuance attempt and
+	// the child's last pull, per instance. Memory only.
+	instanceCerts instanceCertMemo
+	// instanceDNS is what this process knows of the DNS requests nested hz
+	// instances make of it (instance_dns.go): the last request per instance,
+	// and the lock that serialises them. Memory only.
+	instanceDNS instanceDNSMemo
+	// obtainInstanceCert issues one instance certificate; nil is the real
+	// CA conversation (letsencrypt.Manager.RequestInstanceCert). Tests
+	// replace it so no test reaches a CA.
+	obtainInstanceCert func(cfg *config.Config, instance string, dc letsencrypt.DomainConfig) error
+
+	// The one-command bootstrap of a nested hz (handlers_nested_bootstrap.go):
+	// the stored server binaries a child installs (<data dir>/child-bin; nil
+	// is no store), the in-memory bootstrap grants, and the wg0 reload the
+	// enrolment calls (nil is s.wg.Reload; tests replace it so a test never
+	// runs systemd-run on the box running the suite).
+	childBins       *childBinStore
+	childGrants     *childGrants
+	childGrantsOnce sync.Once
+	childEnrolMu    sync.Mutex
+	wgReload        func() error
+
+	// dnsRunningProbe replaces `systemctl is-active dnsmasq` for the child
+	// dnsmasq rule (child_sync.go); nil is the real probe.
+	dnsRunningProbe func() bool
+
+	// parentLANProbe replaces the live LAN read a child's human-VPN range
+	// avoids (child_human_vpn.go); nil is the real read.
+	parentLANProbe func() []string
+
+	// startSyncRun replaces runSyncInternal for the start-sync
+	// (start_sync.go); nil is the real sync. Tests count it.
+	startSyncRun func(SyncLogger, <-chan struct{})
 }
 
 func New(configPath string) (*Server, error) {
@@ -271,6 +405,23 @@ func New(configPath string) (*Server, error) {
 }
 
 func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version string) (*Server, error) {
+	// A nested hz whose own WireGuard settings name its tunnel to the parent
+	// is refused BEFORE anything below touches WireGuard or iptables (the
+	// forward-chain setup is a few lines down). Refusing to start leaves the
+	// tunnel exactly as wg-quick has it; starting would hand it to hz.
+	// child_sync.go has the rest of what hz may touch on a child.
+	if err := cfg.UpstreamTunnelCollision(); err != nil {
+		return nil, fmt.Errorf("LOUD: refusing to start: %w", err)
+	}
+	// B3: a machine that carried a pre-B3 nested-hz marker and nothing else
+	// is removed now — FIRST, before any Save below writes the config — unless
+	// hz holds an agent credential for it (only the server can read that).
+	if removed, _ := settleLegacyHZCarriers(cfg, configPath); len(removed) > 0 && configPath != "" {
+		if err := config.Save(configPath, cfg); err != nil {
+			slog.Error("LOUD: could not save the config after migrating hz instances off machines", "err", err)
+		}
+	}
+
 	// Set up system interfaces
 	var fs system.FileSystem
 	var runner system.CommandRunner
@@ -447,6 +598,7 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 		health:         &HealthStatus{healthy: true},
 		metrics:        integration.NewDetector(),
 		exporterStatus: map[string]exporterProbe{},
+		exporterSeen:   map[string]bool{},
 		static:         newStaticSupervisor(cfg.StaticServeAddr(), dryRun),
 		configShares:   make(map[string]*configShare),
 		installGrants:  newInstallGrants(),
@@ -457,6 +609,7 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 		pendingTOTP:    newPendingTOTPStore(),
 		oidcFlows:      newOIDCFlowStore(),
 		oidcProviders:  &oidcProviderCache{},
+		subsystems:     newSubsystemReport(),
 	}
 
 	// Identity store. A failure here must not stop hz from serving: the admin
@@ -465,20 +618,58 @@ func NewWithConfig(cfg *config.Config, configPath string, dryRun bool, version s
 	// than one running without user accounts. s.users stays nil and every
 	// caller checks.
 	if !dryRun {
+		// A backup import stages its database beside the live one; this is
+		// the only moment nothing holds the file, so it is put in place here.
+		if applied, err := db.ApplyPendingRestore(cfg.UsersDBPath()); err != nil {
+			slog.Error("LOUD: staged database restore NOT applied; starting on the existing database", "error", err)
+		} else if applied {
+			slog.Warn("LOUD: database restored from a backup import; the previous one is kept as .pre-restore-<time>",
+				"path", cfg.UsersDBPath())
+		}
 		if store, err := db.Open(cfg.UsersDBPath()); err != nil {
 			slog.Error("identity store unavailable; user accounts are disabled this run", "error", err)
 		} else {
 			s.users = store
 			slog.Info("identity store ready", "path", store.Path())
 		}
+		s.artifactDir = filepath.Join(cfg.DataDir(), "artifacts")
+		s.buildDir = filepath.Join(cfg.DataDir(), "builds")
+		s.childBins = newChildBinStore(filepath.Join(cfg.DataDir(), "child-bin"))
+		s.child = childFromConfig(cfg)
+		if s.child != nil {
+			s.child.OnCertInstalled = s.applyHAProxyConfig
+			// Names in zones the parent owns: asked of the parent (instance_dns.go).
+			s.child.DNSAsks = s.parentDNSRequest
+		}
 	}
 	s.config.Store(cfg)
+	// Every HAProxy write puts the files the config names on disk first, from
+	// the live config (handlers_haproxy.go).
+	hap.SetSideFiles(s.haproxySideFilesNow)
 	// After the config is stored: the collector reads live server state.
 	s.promHandler = newPromHandler(s)
 	s.static.Rebuild(cfg)
 	s.initSyncedBaseline()
 
 	return s, nil
+}
+
+// defaultIface is "which interface does this box route out of", and it is the
+// ONE place hz asks.
+//
+// It is a privileged-ish READ (config.DetectDefaultInterface parses
+// /proc/net/route) and it is the fact three different answers are derived
+// from: the rule sets hz reconciles and serves, the stand-down decision when
+// there is no default route, and the wg0.conf MASQUERADE clause hz declares
+// (wg_masquerade.go). Asking three times means three answers, and during a
+// route flap they need not agree.
+//
+// The override is for tests; see Server.egressIface.
+func (s *Server) defaultIface() string {
+	if s.egressIface != nil {
+		return *s.egressIface
+	}
+	return config.DetectDefaultInterface()
 }
 
 // cfg returns the current live config. It is the only sanctioned way to read
@@ -493,9 +684,24 @@ func (s *Server) cfg() *config.Config {
 // mutate config — it avoids the torn-read race that direct s.cfg().X = Y
 // mutations have with concurrent readers.
 func (s *Server) updateConfig(fn func(cfg *config.Config)) error {
-	cfg := *s.cfg()
+	old := s.cfg()
+	cfg := *old
 	fn(&cfg)
+	// THE REVERSE HALF OF THE hz-agent / PEER-SYNC GUARD, at the funnel rather
+	// than at the handlers, because a handler is something somebody can forget.
+	// Every path that can put this machine into a fleet goes through here, and
+	// the check costs one pointer comparison until one of them actually does —
+	// only a mutation that introduces a fleet reads the observed store. The two
+	// HA join handlers map the error to a 409 with this text; anything else
+	// surfaces it as the error it already returns. See agent_fleet_guard.go.
+	if err := s.refuseFleetWhileAgentArmed(old, &cfg); err != nil {
+		return err
+	}
+	if err := refuseNewlyMissingDependencies(old, &cfg); err != nil {
+		return err
+	}
 	s.config.Store(&cfg)
+	s.syncVPNListener()
 	return config.Save(s.configPath, &cfg)
 }
 
@@ -700,6 +906,21 @@ func (s *Server) isVPNAdmin(r *http.Request) bool {
 	if peer == nil {
 		return false
 	}
+	// Never an upstream client, whatever VPNAdmins says: it reaches only this
+	// API, so an address-based sign-in would be the whole of its reach. The
+	// toggle and CheckPeerProfileChange refuse the combination; this holds
+	// if a config arrives with it anyway (peer-sync, a hand edit).
+	if s.cfg().GetPeerProfile(peer.Name) == config.ProfileUpstream {
+		return false
+	}
+	// Never a JAILED peer. In MFA scope "all" a VPN admin can be jailed, and
+	// the L3 jail admits hz's own port ("horizon direct", jailAllows). Since
+	// hz also listens on the WG address (vpn_listener.go), that port answers —
+	// so an address-based sign-in here would let a jailed admin past the jail,
+	// which HAProxy's L7 jail (portal only) no longer stands in front of.
+	if s.cfg().IsPeerMFAJailed(peer.Name) {
+		return false
+	}
 
 	for _, adminName := range s.cfg().VPNAdmins {
 		if peer.Name == adminName {
@@ -776,112 +997,6 @@ func (s *Server) isInVPNRange(ip string) bool {
 	return vpnNet.Contains(clientIP)
 }
 
-// Invite management
-// Invites are stored as "token:expiry" where expiry is a Unix timestamp.
-// Tokens expire after 24 hours by default. Legacy tokens without expiry are still accepted.
-
-const inviteExpiry = 24 * time.Hour
-
-// inviteEntry represents a stored invite with expiration
-type inviteEntry struct {
-	Token  string
-	Expiry int64 // Unix timestamp, 0 means no expiry (legacy)
-}
-
-func (s *Server) getInviteEntries() []inviteEntry {
-	var entries []inviteEntry
-
-	file, err := os.Open(s.cfg().InvitesFile)
-	if err != nil {
-		return entries
-	}
-	defer func() { _ = file.Close() }()
-
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		// Parse "token:expiry" format, or legacy plain token
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) == 2 {
-			var expiry int64
-			_, _ = fmt.Sscanf(parts[1], "%d", &expiry)
-			entries = append(entries, inviteEntry{Token: parts[0], Expiry: expiry})
-		} else {
-			// Legacy format: plain token with no expiry
-			entries = append(entries, inviteEntry{Token: line, Expiry: 0})
-		}
-	}
-	return entries
-}
-
-// getInvites returns valid (non-expired) invite tokens for display
-func (s *Server) getInvites() []string {
-	entries := s.getInviteEntries()
-	var tokens []string
-	now := time.Now().Unix()
-	for _, e := range entries {
-		// Skip expired invites
-		if e.Expiry > 0 && e.Expiry < now {
-			continue
-		}
-		tokens = append(tokens, e.Token)
-	}
-	return tokens
-}
-
-func (s *Server) isValidInvite(token string) bool {
-	entries := s.getInviteEntries()
-	now := time.Now().Unix()
-
-	for _, e := range entries {
-		if e.Token == token {
-			// Check expiry (0 means no expiry for legacy tokens)
-			if e.Expiry == 0 || e.Expiry > now {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// addInvite stores an invite token with 24-hour expiration
-func (s *Server) addInvite(token string) error {
-	expiry := time.Now().Add(inviteExpiry).Unix()
-
-	f, err := os.OpenFile(s.cfg().InvitesFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-
-	_, err = fmt.Fprintf(f, "%s:%d\n", token, expiry)
-	return err
-}
-
-func (s *Server) removeInvite(token string) error {
-	entries := s.getInviteEntries()
-	var remaining []string
-
-	for _, e := range entries {
-		if e.Token != token {
-			if e.Expiry > 0 {
-				remaining = append(remaining, fmt.Sprintf("%s:%d", e.Token, e.Expiry))
-			} else {
-				remaining = append(remaining, e.Token)
-			}
-		}
-	}
-
-	content := strings.Join(remaining, "\n")
-	if len(remaining) > 0 {
-		content += "\n"
-	}
-	return os.WriteFile(s.cfg().InvitesFile, []byte(content), 0600)
-}
-
 // Health check handler - returns minimal response based on background check
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -950,6 +1065,9 @@ func (s *Server) startHealthCheck() {
 
 		for range ticker.C {
 			s.runHealthCheck()
+			// A WG address changed by any path (wg0.conf reload, restore)
+			// rebinds within a tick; the config funnels also call it at once.
+			s.syncVPNListener()
 		}
 	}()
 }
@@ -1005,7 +1123,10 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/admin/hz/install", s.handleHZInstallScript)           // curl|bash installer for the hz operator CLI
 	mux.HandleFunc("/admin/hz-probe/install", s.handleProbeInstallScript)  // curl|bash installer for the outside-in vantage agent
 	mux.HandleFunc("/admin/hz-probe/bin/", s.handleProbeBinary)            // hz-probe binaries for the installer above
+	mux.HandleFunc("/admin/hz-agent/bin/", s.handleAgentBinary)            // hz-agent, the root daemon: fetched once, by a human, with sudo
 	mux.HandleFunc("/admin/hz/bin/", s.handleHZBinary)                     // per-arch hz binaries (needs -tags hzembed)
+	mux.HandleFunc("/admin/hz-child/install/", s.handleChildInstallScript) // nested hz bootstrap script, for a live grant
+	mux.HandleFunc("/admin/hz-child/enrol/", s.handleChildEnrol)           // nested hz enrolment: public key up, peer + token down
 
 	// Backup/restore API (Bearer token auth)
 	mux.HandleFunc("/admin/backup/export", s.backupAuthMiddleware(s.handleBackupExport))
@@ -1016,16 +1137,11 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mcpHandler := mcpSrv.StreamableHTTPHandler()
 	mux.Handle("/mcp", s.mcpAuthMiddleware(mcpHandler))
 
-	// Multi-instance HA peer plumbing — bound to WG only. Per-instance:
-	// each peer must answer pings/config-pull regardless of primary status.
-	s.handlePeerInstance(mux, "/api/peer/ping", s.peerOnlyMiddleware(s.handlePeerPing))
-	s.handlePeerInstance(mux, "/api/peer/config", s.peerOnlyMiddleware(s.handlePeerConfig))
-	// Cert pull endpoint for Phase 2 ACME HA — non-owners fetch cert+key
-	// from the owner peer. Subtree because domain is in the path.
-	s.handlePeerInstanceSubtree(mux, "/api/peer/cert/", s.peerOnlyMiddleware(s.handlePeerCert))
-	// Ban state endpoint for Phase 4 LWW sync — each peer exposes its
-	// ban list so others can merge.
-	s.handlePeerInstance(mux, "/api/peer/state", s.peerOnlyMiddleware(s.handlePeerState))
+	// Multi-instance HA peer plumbing — bound to WG only, and restricted to
+	// configured peers. Registered in one place (registerPeerAPI) so the
+	// middleware cannot be forgotten on a new route and the surface can be
+	// enumerated by its access-control test.
+	s.registerPeerAPI(mux)
 
 	// API v1 auth routes (JSON, SameSite cookie auth). Per-instance: a
 	// non-primary spare must still allow login/logout for read-only access.
@@ -1051,6 +1167,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/users/disable", s.handleAPIUserDisable)
 	mux.HandleFunc("/api/v1/policy", s.handleAPIPolicy)
 	mux.HandleFunc("/api/v1/settings/oidc", s.handleAPIOIDCSettings)
+	mux.HandleFunc("/api/v1/settings/ntfy", s.handleAPINtfySettings)
 	mux.HandleFunc("/api/v1/settings/oidc/discover", s.handleAPIOIDCDiscover)
 	mux.HandleFunc("/api/v1/rate-limit", s.handleAPIRateLimit)
 	mux.HandleFunc("/api/v1/dns/local", s.handleAPILocalDNS)
@@ -1059,14 +1176,123 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// API v1 data routes
 	mux.HandleFunc("/api/v1/dashboard", s.handleAPIDashboard)
 	mux.HandleFunc("/api/v1/services", s.handleAPIServices)
+	mux.HandleFunc("/api/v1/environments", s.handleAPIEnvironments)
+	mux.HandleFunc("/api/v1/projects", s.handleAPIProjects)
+	mux.HandleFunc("/api/v1/projects/feed", s.handleAPIProjectFeed)
+	// The write half of the tree. Separate paths rather than a method switch on
+	// /api/v1/projects, matching /api/v1/services/{add,edit}: a removal needs a
+	// body (cascade, confirm) and a DELETE with a body is a thing every proxy
+	// disagrees about.
+	mux.HandleFunc("/api/v1/projects/add", s.handleAPIProjectAdd)
+	mux.HandleFunc("/api/v1/projects/rm", s.handleAPIProjectRm)
+	mux.HandleFunc("/api/v1/environments/add", s.handleAPIEnvironmentAdd)
+	mux.HandleFunc("/api/v1/environments/set", s.handleAPIEnvironmentSet)
+	mux.HandleFunc("/api/v1/environments/rm", s.handleAPIEnvironmentRm)
+	// The tested staging -> prod release (handlers_api_deploys.go). Plain
+	// registrations, so a non-primary refuses the POSTs
+	// (nonPrimaryGuardMiddleware): reports and promotions are in node-local
+	// hz.db and belong on the primary. A peer still answers the GETs, and a
+	// check there finds no promotion row and refuses — fail-closed.
+	mux.HandleFunc("/api/v1/environments/promote", s.handleAPIEnvironmentPromote)
+	mux.HandleFunc("/api/v1/deploys/report", s.handleAPIDeployReport)
+	mux.HandleFunc("/api/v1/deploys/check", s.handleAPIDeployCheck)
+	mux.HandleFunc("/api/v1/deploys/latest", s.handleAPIDeployLatest)
+	mux.HandleFunc("/api/v1/promotions", s.handleAPIPromotions)
+	// N4a (handlers_api_artifacts.go, handlers_api_apply.go): the artifact
+	// store, apply, hold, desired and the instance token. Same placement rule
+	// as above — they write hz.db and belong on the primary.
+	mux.HandleFunc("/api/v1/artifacts", s.handleAPIArtifacts)
+	mux.HandleFunc("/api/v1/artifacts/", s.handleAPIArtifact)
+	mux.HandleFunc("/api/v1/environments/apply", s.handleAPIEnvironmentApply)
+	mux.HandleFunc("/api/v1/environments/hold", s.handleAPIEnvironmentHold(true))
+	mux.HandleFunc("/api/v1/environments/unhold", s.handleAPIEnvironmentHold(false))
+	mux.HandleFunc("/api/v1/deploys/desired", s.handleAPIDeployDesired)
+	mux.HandleFunc("/api/v1/deploys/applied", s.handleAPIDeploysApplied)
+	mux.HandleFunc("/api/v1/machines/hz-token", s.handleAPIInstanceToken) // pre-B3 alias, one release
+	// Hz instances: nested hz with their own config — never machines.
+	mux.HandleFunc(apitypes.HZInstancesPath, s.handleAPIHZInstances)
+	mux.HandleFunc(apitypes.HZInstancesPath+"/add", s.handleAPIHZInstanceAdd)
+	mux.HandleFunc(apitypes.HZInstancesPath+"/set", s.handleAPIHZInstanceSet)
+	mux.HandleFunc(apitypes.HZInstancesPath+"/rm", s.handleAPIHZInstanceRm)
+	mux.HandleFunc(apitypes.HZInstancesPath+"/token", s.handleAPIInstanceToken)
+	// GET /api/v1/hz-instances/<name>/cert — that instance's token only
+	// (instance_tls.go).
+	mux.HandleFunc(apitypes.HZInstancesPath+"/", s.handleAPIHZInstanceSubtree)
+	// The build registry (handlers_api_builds.go): builders, and the builds
+	// they start, log, state and finish. Same placement rule: the numbers and
+	// the logs are on the primary.
+	mux.HandleFunc("/api/v1/build-agents", s.handleAPIBuildAgents)
+	mux.HandleFunc("/api/v1/build-agents/", s.handleAPIBuildAgent)
+	mux.HandleFunc("/api/v1/builders", s.handleAPIBuilders) // deprecated, one release
+	mux.HandleFunc("/api/v1/builders/", s.handleAPIBuilder)
+	mux.HandleFunc("/api/v1/builds", s.handleAPIBuilds)
+	mux.HandleFunc("/api/v1/builds/seed", s.handleAPIBuildSeed)
+	mux.HandleFunc("/api/v1/builds/", s.handleAPIBuild)
+	// The one-command bootstrap of a nested hz (handlers_nested_bootstrap.go).
+	// Generate writes config.json; the binary is fetched by the child over its
+	// upstream VPN client with its instance token.
+	mux.HandleFunc(apitypes.NestedBootstrapPath, s.handleAPINestedBootstrap)
+	mux.HandleFunc("/api/v1/nested/bin/", s.handleNestedBinary)
+	// Release lines (handlers_api_lines.go). Same placement rule: the POSTs
+	// write hz.db or config.json and belong on the primary.
+	mux.HandleFunc("/api/v1/backups/kept", s.handleAPIKeptBackup)
+	mux.HandleFunc("/api/v1/restore-tests/report", s.handleAPIRestoreTestReport)
+	mux.HandleFunc("/api/v1/projects/lines", s.handleAPIProjectLines)
+	mux.HandleFunc("/api/v1/projects/lines/pin", s.handleAPILinePin(true))
+	mux.HandleFunc("/api/v1/projects/lines/unpin", s.handleAPILinePin(false))
+	// The machines: identity and segment membership. No project and no
+	// environment — those are coordinates of an instance, not of a box
+	// (plan/design/architecture.md, "Instance, not machine, carries the environment").
+	mux.HandleFunc("/api/v1/machines", s.handleAPIMachines)
+	mux.HandleFunc("/api/v1/machines/add", s.handleAPIMachineAdd)
+	mux.HandleFunc("/api/v1/machines/set", s.handleAPIMachineSet)
+	mux.HandleFunc("/api/v1/machines/rm", s.handleAPIMachineRm)
+	// The hz instances: this one and its HA peers. Read-only; the project
+	// column is a join against the machines above.
+	mux.HandleFunc(apitypes.InstancesPath, s.handleAPIInstances)
+	// The segments: what a machine's segment NAME resolves to — a project, a
+	// range, an interface and the addressed members on it.
+	mux.HandleFunc("/api/v1/segments", s.handleAPISegments)
+	mux.HandleFunc("/api/v1/segments/add", s.handleAPISegmentAdd)
+	mux.HandleFunc("/api/v1/segments/set", s.handleAPISegmentSet)
+	mux.HandleFunc("/api/v1/segments/rm", s.handleAPISegmentRm)
+	// What hz says one machine should look like, for a human. The PURE
+	// projection and nothing composed onto it — the agent's own poll
+	// (agent.DesiredPath) is a different question with a different answer.
+	// Read-only: hz publishes and the agent collects, so there is no apply
+	// beside this and there is not going to be one.
+	mux.HandleFunc(apitypes.MachineProjectionPath, s.handleAPIMachineProjection)
+	mux.HandleFunc("/api/v1/import", s.handleAPIImport)
 	mux.HandleFunc("/api/v1/domains", s.handleAPIDomains)
 	mux.HandleFunc("/api/v1/vpn/peers", s.handleAPIVPNPeers)
 	mux.HandleFunc("/api/v1/zones", s.handleAPIZones)
 	mux.HandleFunc("/api/v1/sync/pending", s.handleAPIPendingChanges)
 
+	// What hz-agent polls for: this machine's desired state, rendered by the
+	// pure halves hz already uses. Per-instance, because it describes the box
+	// answering the request — a spare must serve its own, not the primary's.
+	s.handlePeerInstance(mux, agent.DesiredPath, s.handleAgentDesired)
+
+	// The other direction: what the machine found. POST is the agent's own
+	// report, GET is the admin read behind the drift screen. Per-instance for
+	// the same reason the poll is — a report is about the box that sent it,
+	// to the hz it polls, and a peer must not serve another peer's record.
+	s.handlePeerInstance(mux, agent.ObservedPath, s.handleAgentObserved)
+
+	// Where a machine's agent credential is ISSUED. hz is the issuer since
+	// item 13 — `hz-agent enroll` asks rather than minting its own and writing
+	// hz's store, which is what a remote agent must never be able to do.
+	// Admin-gated, and refused for a machine hz does not declare.
+	//
+	// Per-instance for the same reason the poll and the report are: a
+	// credential is recorded beside the config of the hz that issued it, and a
+	// spare must write its own store rather than the primary's.
+	s.handlePeerInstance(mux, agent.EnrollPath, s.handleAPIAgentEnroll)
+
 	// API v1 mutation routes
 	mux.HandleFunc("/api/v1/services/add", s.handleAPIAddService)
 	mux.HandleFunc("/api/v1/services/edit", s.handleAPIEditService)
+	mux.HandleFunc("/api/v1/services/assign", s.handleAPIServiceAssign)
 	mux.HandleFunc("/api/v1/services/delete", s.handleAPIDeleteService)
 	mux.HandleFunc("/api/v1/services/delete/preview", s.handleAPIDeleteServicePreview)
 	// DNS sync routes are per-instance: each peer manages its own A
@@ -1083,9 +1309,11 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/zones/records/add", s.handleAPIRecordAdd)
 	mux.HandleFunc("/api/v1/zones/records/edit", s.handleAPIRecordEdit)
 	mux.HandleFunc("/api/v1/zones/records/delete", s.handleAPIRecordDelete)
+	mux.HandleFunc("/api/v1/zones/records/set", s.handleAPIRecordSet)
 	mux.HandleFunc("/api/v1/zones/tombstones/cancel", s.handleAPITombstoneCancel)
 	mux.HandleFunc("/api/v1/zones/subzone", s.handleAPIAddSubZone)
 	mux.HandleFunc("/api/v1/ssl/request-cert", s.handleAPIRequestCert)
+	mux.HandleFunc("/api/v1/ssl/test-issue", s.handleAPISSLTestIssue)
 	mux.HandleFunc("/api/v1/domains/ssl/add", s.handleAPIDomainSSLAdd)
 	mux.HandleFunc("/api/v1/domains/ssl/remove", s.handleAPIDomainSSLRemove)
 	// Trigger-sync is per-instance: re-derives haproxy/dnsmasq state.
@@ -1104,6 +1332,9 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/vpn/invites", s.handleAPIListInvites)
 	mux.HandleFunc("/api/v1/vpn/invites/create", s.handleAPICreateInvite)
 	mux.HandleFunc("/api/v1/vpn/invites/delete", s.handleAPIDeleteInvite)
+	// The invitee's two calls: no session, the token is the credential, kiosk vhost only.
+	mux.HandleFunc("/api/v1/vpn/invite/check", s.handleAPIInviteCheck)
+	mux.HandleFunc("/api/v1/vpn/invite/redeem", s.handleAPIInviteRedeem)
 
 	// HA fleet routes
 	mux.HandleFunc("/api/v1/ha/status", s.handleAPIHAStatus)
@@ -1142,6 +1373,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/pci/level", s.handleAPIPCILevel)
 	mux.HandleFunc("/api/v1/mfa/exception", s.handleAPIMFAException)
 	mux.HandleFunc("/api/v1/mfa/exception/revoke", s.handleAPIMFAExceptionRevoke)
+	mux.HandleFunc("/api/v1/vpn/peers/tag", s.handleAPIPeerTag)
 
 	// Config manager. The first three are the machine protocol, authenticated
 	// as a VPN peer rather than as an admin — register is the one endpoint an
@@ -1153,11 +1385,29 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/cm/config", s.handleAPICMConfig)
 	mux.HandleFunc("/api/v1/cm/registrations", s.handleAPICMRegistrations)
 	mux.HandleFunc("/api/v1/cm/registrations/", s.handleAPICMRegistrationAction)
+	// Enrolled boxes. Registered from the shared constant rather than a
+	// literal: the CLI reads the same one, so a rename is one edit instead of
+	// two places that agree until they do not. cm_routes_test.go drives the
+	// real mux with these constants for the same reason.
+	mux.HandleFunc(apitypes.CMPathMachines, s.handleAPICMMachines)
+	mux.HandleFunc(apitypes.CMPathMachines+"/", s.handleAPICMMachine)
 	mux.HandleFunc("/api/v1/cm/configs", s.handleAPICMConfigs)
 	mux.HandleFunc("/api/v1/cm/configs/", s.handleAPICMConfigByID)
 	mux.HandleFunc("/api/v1/cm/resolve", s.handleAPICMResolve)
 	mux.HandleFunc("/api/v1/cm/promote/gate", s.handleAPICMPromotionGate)
 	mux.HandleFunc("/api/v1/cm/current-key", s.handleAPICMCurrentKey)
+	// Version drift: the declared version of every instance's rung beside the
+	// version that instance last reported. The join
+	// plan/design/example-projection.md §7 records as missing — see
+	// handlers_version_drift.go. Not the agent channel: different clock.
+	mux.HandleFunc(apitypes.CMPathVersionDrift, s.handleAPICMVersionDrift)
+	// Key custody. These read and write the CONFIG, not the identity store, so
+	// they are gated on isAdmin alone and keep working on a box whose database
+	// failed to open — which is exactly the box somebody is recovering.
+	mux.HandleFunc(apitypes.CMPathRecovery, s.handleAPICMRecovery)
+	mux.HandleFunc(apitypes.CMPathRecoveryRecipients, s.handleAPICMRecoveryRecipients)
+	mux.HandleFunc(apitypes.CMPathRecoveryRecipients+"/", s.handleAPICMRecoveryRecipients)
+	mux.HandleFunc(apitypes.CMPathRecoveryWraps, s.handleAPICMRecoveryWraps)
 
 	// System health (on-host software stack). Per-instance — each peer reports
 	// its own view; downstream/network checks live at /api/v1/checks.
@@ -1168,24 +1418,35 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	s.handlePeerInstance(mux, "/api/v1/system/fix/wg-forward-chain", s.handleAPISystemFixWGForwardChain)
 	s.handlePeerInstance(mux, "/api/v1/system/fix/wg-rules", s.handleAPISystemFixWGRules)
 	s.handlePeerInstance(mux, "/api/v1/system/fix/log-retention", s.handleAPISystemFixLogRetention)
-	s.handlePeerInstance(mux, "/api/v1/wg/create-config", s.handleAPIWGCreateConfig)
-	s.handlePeerInstance(mux, "/api/v1/system/install/horizon-unit", s.handleAPISystemInstallHorizonUnit)
-	s.handlePeerInstance(mux, "/api/v1/system/enable/horizon", s.handleAPISystemEnableHorizon)
-	s.handlePeerInstance(mux, "/api/v1/haproxy/fix-logging", s.handleAPIHAProxyFixLogging)
+	// There is no /api/v1/wg/create-config and no /api/v1/haproxy/fix-logging.
+	// Both did their work by piping an hz-built shell string into
+	// `systemd-run … bash -c` to escape hz's own ProtectSystem=strict sandbox,
+	// which is §5.2 rules 1 and 3 at once, and between them they were the only
+	// reason the systemdRun helper existed. They moved to the binaries that own
+	// the files (plan/design/privilege-audit.md §7 A):
+	//
+	//   wg0.conf             sudo hz-agent wg-create-config     (refuses to replace one)
+	//   haproxy's logging    sudo homelab-horizon fix-haproxy-logging
+	//
+	// hz still DIAGNOSES both — /api/v1/system/health carries the verdict and
+	// the System Health card names the command, the same shape the unit rows
+	// and the dependency rows already have.
 	s.handlePeerInstance(mux, "/api/v1/dnsmasq/write-config", s.handleAPIDNSMasqWriteConfig)
 	s.handlePeerInstance(mux, "/api/v1/dnsmasq/reload", s.handleAPIDNSMasqReload)
 	s.handlePeerInstance(mux, "/api/v1/dnsmasq/start", s.handleAPIDNSMasqStart)
 	s.handlePeerInstance(mux, "/api/v1/dnsmasq/fix-interfaces", s.handleAPIDNSMasqFixInterfaces)
-	s.handlePeerInstance(mux, "/api/v1/system/install/package", s.handleAPISystemInstallPackage)
 	s.handlePeerInstance(mux, "/api/v1/system/apt-audit", s.handleAPISystemAptAudit)
 	s.handlePeerInstance(mux, "/api/v1/system/metrics", s.handleAPISystemMetrics)
 
-	// IPTables rule inventory + bless/unbless/remove/reconcile. All per-
-	// instance (iptables is a local-machine concern, bless is local-only).
+	// IPTables rule inventory + bless/unbless/reconcile. All per-instance
+	// (iptables is a local-machine concern, bless is local-only). There is no
+	// remove: hz will not run `iptables -D` with a table, chain and args from
+	// a request body (privilege-classification.md §3.3). Reconcile deletes
+	// stale rules; an unknown rule is not hz's to delete, and the UI hands the
+	// operator the shell command for it.
 	s.handlePeerInstance(mux, "/api/v1/iptables/rules", s.handleAPIIPTablesRules)
 	s.handlePeerInstance(mux, "/api/v1/iptables/bless", s.handleAPIIPTablesBless)
 	s.handlePeerInstance(mux, "/api/v1/iptables/unbless", s.handleAPIIPTablesUnbless)
-	s.handlePeerInstance(mux, "/api/v1/iptables/remove", s.handleAPIIPTablesRemove)
 	s.handlePeerInstance(mux, "/api/v1/iptables/reconcile", s.handleAPIIPTablesReconcile)
 
 	// API v1 settings routes
@@ -1200,6 +1461,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	s.handlePeerInstance(mux, "/api/v1/haproxy/write-config", s.handleAPIHAProxyWriteConfig)
 	s.handlePeerInstance(mux, "/api/v1/haproxy/reload", s.handleAPIHAProxyReload)
 	mux.HandleFunc("/api/v1/haproxy/config-preview", s.handleAPIHAProxyConfigPreview)
+	mux.HandleFunc("/api/v1/doctor", s.handleAPIDoctor)
 	mux.HandleFunc("/api/v1/checks", s.handleAPIChecks)
 	mux.HandleFunc("/api/v1/checks/history", s.handleAPICheckHistory)
 	mux.HandleFunc("/api/v1/checks/history/all", s.handleAPIAllCheckHistory)
@@ -1207,6 +1469,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/checks/delete", s.handleAPIDeleteCheck)
 	mux.HandleFunc("/api/v1/checks/toggle", s.handleAPIToggleCheck)
 	mux.HandleFunc("/api/v1/checks/run", s.handleAPIRunCheck)
+	mux.HandleFunc(apitypes.ProbeDiagnosisPath, s.handleAPIProbeDiagnosis)
 	mux.HandleFunc("/api/v1/checks/remotes", s.handleAPIRemotes)
 	mux.HandleFunc("/api/v1/checks/remotes/add", s.handleAPIRemoteAdd)
 	mux.HandleFunc("/api/v1/checks/remotes/update", s.handleAPIRemoteUpdate)
@@ -1227,6 +1490,12 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// Observability topology (admin): declared hosts + Prometheus exporters.
 	mux.HandleFunc("/api/v1/topology", s.handleAPITopology)
 	mux.HandleFunc("/api/v1/topology/hosts", s.handleAPITopologyHosts)
+	mux.HandleFunc("/api/v1/topology/hosts/show", s.handleAPITopologyHostShow)
+	// The host screen's one read: every host at once, with each dependant's
+	// authored value AND what it resolves to. See handlers_topology_hosts_view.go.
+	mux.HandleFunc("/api/v1/topology/hosts/view", s.handleAPITopologyHostsView)
+	mux.HandleFunc("/api/v1/topology/hosts/set", s.handleAPITopologyHostSet)
+	mux.HandleFunc("/api/v1/topology/hosts/adopt", s.handleAPITopologyHostAdopt)
 	mux.HandleFunc("/api/v1/topology/exporters", s.handleAPITopologyExporters)
 	mux.HandleFunc("/api/v1/topology/scrape-exclusions", s.handleAPITopologyScrapeExclusions)
 	mux.HandleFunc("/api/v1/topology/reprobe", s.handleAPITopologyReprobe)
@@ -1256,7 +1525,13 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func (s *Server) ensureServicesRunning() {
+// ensureServicesRunning brings up the subsystems hz is responsible for and
+// records honestly what happened. See startup_plan.go for why the result is
+// kept rather than logged and discarded.
+//
+// It returns the per-subsystem state so Run() can decide what to tell systemd
+// and the log. It never stops hz from serving.
+func (s *Server) ensureServicesRunning() []SubsystemState {
 	// Ensure all services have API tokens
 	tokensGenerated := false
 	services := s.cfg().Services
@@ -1277,73 +1552,169 @@ func (s *Server) ensureServicesRunning() {
 	// In Docker, skip service management (no systemd)
 	if _, err := os.Stat("/.dockerenv"); err == nil {
 		slog.Info("running in Docker: skipping service startup (no systemd)")
-		return
+		return nil
 	}
 
-	// Ensure WireGuard interface is up
-	status := s.wg.GetInterfaceStatus()
-	if !status.Up {
-		slog.Info("WireGuard interface is down, bringing up", "interface", s.cfg().WGInterface)
-		if err := s.wg.InterfaceUp(); err != nil {
-			slog.Error("failed to bring up WireGuard interface", "interface", s.cfg().WGInterface, "err", err)
-		} else {
-			slog.Info("WireGuard interface up", "interface", s.cfg().WGInterface)
+	// Say what is missing, unconditionally. There is no longer a flag that
+	// could install them instead: hz never installs packages at boot, so the
+	// only thing startup can do about an absent dependency is name it and the
+	// command that fixes it. An install with none of the dependencies present
+	// used to produce cryptic start failures and no statement that the packages
+	// simply were not there.
+	if missing := autoheal.Missing(s.cfg()); len(missing) > 0 {
+		pkgs := make([]string, 0, len(missing))
+		for _, d := range missing {
+			pkgs = append(pkgs, d.Package)
 		}
-	} else {
-		slog.Debug("WireGuard interface up", "interface", s.cfg().WGInterface)
+		slog.Warn("dependencies missing; run `homelab-horizon install-deps`",
+			"packages", strings.Join(pkgs, " "))
 	}
 
-	// Ensure dnsmasq is running if enabled
-	if s.cfg().DNSMasqEnabled {
-		dnsStatus := s.dns.Status()
+	for _, p := range planStartup(s.observeSubsystems()) {
+		s.subsystems.set(s.applySubsystemPlan(p))
+	}
+	return s.subsystems.all()
+}
 
-		// Regenerate config if interfaces are missing
-		if len(dnsStatus.MissingInterfaces) > 0 {
-			slog.Warn("dnsmasq config stale: missing interfaces", "missing", dnsStatus.MissingInterfaces)
-			if err := s.dns.WriteConfig(); err != nil {
-				slog.Error("failed to regenerate dnsmasq config", "err", err)
-			} else {
-				slog.Info("dnsmasq config regenerated")
-				if err := s.dns.SetRecords(s.cfg().DeriveDNSRecords()); err != nil {
-					slog.Warn("dns.SetMappings", "err", err)
-				}
-				if dnsStatus.Running {
-					if err := s.dns.Reload(); err != nil {
-						slog.Error("failed to restart dnsmasq", "err", err)
-					} else {
-						slog.Info("dnsmasq restarted")
-					}
-				}
-				dnsStatus = s.dns.Status() // re-check
+// observeSubsystems reads the machine. The only impure half of the startup
+// decision; everything it returns feeds planStartup, which is pure.
+func (s *Server) observeSubsystems() subsystemObservation {
+	cfg := s.cfg()
+	o := subsystemObservation{
+		WGConfigPath: cfg.WGConfigPath,
+		DNSEnabled:   cfg.DNSMasqEnabled,
+		DNSChild:     cfg.Upstream != nil,
+		HAEnabled:    cfg.HAProxyEnabled,
+	}
+
+	if cfg.WGConfigPath != "" {
+		if _, err := os.Stat(cfg.WGConfigPath); err == nil {
+			o.WGConfigExists = true
+		}
+	}
+	o.WGUp = s.wg.GetInterfaceStatus().Up
+
+	if o.DNSEnabled {
+		_, err := exec.LookPath("dnsmasq")
+		o.DNSBinaryOnPath = err == nil
+		st := s.dns.Status()
+		o.DNSConfigPath = cfg.DNSMasqConfigPath
+		o.DNSConfigExists = st.ConfigExists
+		o.DNSRunning = st.Running
+		o.DNSMissingIface = st.MissingInterfaces
+	}
+
+	if o.HAEnabled {
+		_, err := exec.LookPath("haproxy")
+		o.HABinaryOnPath = err == nil
+		o.HARunning = s.haproxy.GetStatus().Running
+	}
+
+	return o
+}
+
+// applySubsystemPlan executes one plan and reports the resulting state.
+func (s *Server) applySubsystemPlan(p subsystemPlan) SubsystemState {
+	if p.Skip != "" {
+		// Not an error: hz was never asked to run this, or cannot yet. Said
+		// once, plainly, with the thing to do about it.
+		slog.Warn("subsystem not started", "subsystem", p.Name, "reason", p.Skip)
+		return SubsystemState{Name: p.Name, Status: skipStatus(p.Skip), Detail: p.Skip}
+	}
+
+	if p.WriteConfig {
+		if err := s.writeSubsystemConfig(p.Name); err != nil {
+			detail := "could not write its configuration: " + err.Error()
+			slog.Error("subsystem config write failed", "subsystem", p.Name, "err", err)
+			return SubsystemState{Name: p.Name, Status: monitor.StatusFailed, Detail: detail}
+		}
+		slog.Info("subsystem configuration written", "subsystem", p.Name)
+	}
+
+	if p.Start {
+		if err := s.startSubsystem(p.Name); err != nil {
+			detail := "failed to start: " + err.Error()
+			slog.Error("subsystem failed to start", "subsystem", p.Name, "err", err)
+			return SubsystemState{Name: p.Name, Status: monitor.StatusFailed, Detail: detail}
+		}
+		slog.Info("subsystem started", "subsystem", p.Name)
+	}
+
+	return SubsystemState{Name: p.Name, Status: monitor.StatusOK, Detail: "running"}
+}
+
+// skipStatus classifies a skip reason. A subsystem switched off in the config
+// is disabled — a decision, not a fault, and nothing should page about it.
+// Anything else (not installed, not configured yet) is a warning: hz is not
+// broken, but it is not doing that job either, and silence there is how a
+// gateway ends up with no DNS and a green dashboard.
+func skipStatus(reason string) string {
+	if strings.Contains(reason, "disabled in the configuration") || strings.HasPrefix(reason, childDNSMasqSkipPrefix) {
+		return monitor.StatusDisabled
+	}
+	return monitor.StatusWarning
+}
+
+func (s *Server) writeSubsystemConfig(name string) error {
+	if name != SubsystemDNSMasq {
+		return nil
+	}
+	if err := s.dns.WriteConfig(); err != nil {
+		return err
+	}
+	return s.dns.SetRecords(s.cfg().DeriveDNSRecords())
+}
+
+func (s *Server) startSubsystem(name string) error {
+	switch name {
+	case SubsystemWireGuard:
+		return s.wg.InterfaceUp()
+	case SubsystemDNSMasq:
+		return s.dns.Start()
+	case SubsystemHAProxy:
+		return s.haproxy.Start()
+	}
+	return nil
+}
+
+// probeSubsystem is the monitor's live re-read of a subsystem. It is what
+// turns a startup failure into a check row that keeps failing — and clears
+// itself once someone fixes it — rather than a line in the journal.
+func (s *Server) probeSubsystem(name string) error {
+	st, ok := s.subsystems.get(name)
+	if !ok {
+		return fmt.Errorf("unknown subsystem %q", name)
+	}
+	if st.Status == monitor.StatusDisabled {
+		return nil
+	}
+	switch name {
+	case SubsystemWireGuard:
+		cfg := s.cfg()
+		if cfg.WGConfigPath != "" {
+			if _, err := os.Stat(cfg.WGConfigPath); err != nil {
+				return monitor.Warnf("%s", st.Detail)
 			}
 		}
-
-		if !dnsStatus.Running {
-			slog.Info("dnsmasq not running, starting")
-			if err := s.dns.Start(); err != nil {
-				slog.Error("failed to start dnsmasq", "err", err)
-			} else {
-				slog.Info("dnsmasq started")
-			}
-		} else {
-			slog.Debug("dnsmasq running")
+		if !s.wg.GetInterfaceStatus().Up {
+			return fmt.Errorf("WireGuard interface %s is down", cfg.WGInterface)
+		}
+	case SubsystemDNSMasq:
+		if _, err := exec.LookPath("dnsmasq"); err != nil {
+			return monitor.Warnf("the dnsmasq binary is not installed (homelab-horizon install-deps)")
+		}
+		if !s.dns.Status().Running {
+			return errors.New("dnsmasq is not running")
+		}
+	case SubsystemHAProxy:
+		if _, err := exec.LookPath("haproxy"); err != nil {
+			return monitor.Warnf("the haproxy binary is not installed (homelab-horizon install-deps)")
+		}
+		if !s.haproxy.GetStatus().Running {
+			return errors.New("HAProxy is not running")
 		}
 	}
-
-	// Ensure HAProxy is running if enabled
-	if s.cfg().HAProxyEnabled {
-		hapStatus := s.haproxy.GetStatus()
-		if !hapStatus.Running {
-			slog.Info("HAProxy not running, starting")
-			if err := s.haproxy.Start(); err != nil {
-				slog.Error("failed to start HAProxy", "err", err)
-			} else {
-				slog.Info("HAProxy started")
-			}
-		} else {
-			slog.Debug("HAProxy running")
-		}
-	}
+	return nil
 }
 
 // startRoute53Sync runs the background public-IP detector. Unlike the prior
@@ -1360,7 +1731,15 @@ func (s *Server) startRoute53Sync() {
 		return
 	}
 
-	slog.Info("starting Route53/public IP sync", "interval_s", interval)
+	// Named for what it does rather than for one consumer of it. The loop is
+	// public-IP DETECTION — WireGuard client configs, the pinned-IP warnings
+	// and the settings page all read the cached value, so it runs on a box
+	// with no DNS provider at all. Only the record-sync half is conditional,
+	// and it no-ops on its own when nothing derives a record. Logging it as
+	// "Route53 sync" made a box with no provider look like it was talking to
+	// AWS; say which half is live instead.
+	slog.Info("starting public IP detection", "interval_s", interval,
+		"dns_record_sync", len(s.cfg().DeriveRoute53Records()) > 0)
 
 	go func() {
 		ticker := time.NewTicker(time.Duration(interval) * time.Second)
@@ -1452,27 +1831,48 @@ func (s *Server) syncPublicIPAndRecords() {
 		return
 	}
 
-	// Sync all derived DNS records
-	records := s.cfg().DeriveRoute53Records()
-	if len(records) == 0 {
-		return
-	}
-
 	reason := "reconcile"
 	if changed {
 		reason = "public IP changed"
 	}
-	slog.Info("syncing DNS records", "count", len(records), "reason", reason)
+	s.syncExternalDNSRecords(reason)
+}
 
-	for _, rec := range records {
-		changed, err := route53.SyncRecord(rec)
-		if err != nil {
-			slog.Error("DNS sync failed", "record", rec.Name, "err", err)
+// syncExternalDNSRecords publishes every service's external DNS this hz
+// publishes itself, and reports every name it leaves out: a name a nested hz
+// hands its parent at DEBUG (correct, not a failure), a name in a zone with no
+// provider at ERROR with the reason (nothing publishes it).
+func (s *Server) syncExternalDNSRecords(reason string) {
+	records, skipped := s.cfg().DeriveRoute53Plan()
+	for _, sk := range skipped {
+		if sk.Delegated {
+			slog.Debug("external DNS: not written here; the parent hz publishes it",
+				"service", sk.Service, "record", sk.Name, "reason", sk.Reason)
 			continue
 		}
-		if changed {
-			slog.Info("DNS record updated", "record", rec.Name, "value", rec.Value)
+		slog.Error("DNS sync failed", "service", sk.Service, "record", sk.Name, "err", sk.Reason)
+	}
+	if len(records) == 0 {
+		return
+	}
+	if s.dnsSyncBlocked() {
+		slog.Warn("external DNS held: DNS drift block active (clear drift to resume)", "reason", reason)
+		return
+	}
+
+	slog.Info("syncing DNS records", "count", len(records), "reason", reason)
+
+	results, err := s.publishExternalDNS(s.newDNSSyncRun(), records)
+	for _, res := range results {
+		switch {
+		case res.Err != nil:
+			slog.Error("DNS sync failed", "record", res.Name, "err", res.Err)
+		case res.Changed:
+			slog.Info("DNS record updated", "record", res.Name, "value", strings.Join(res.Values, ","))
 		}
+	}
+	if errors.Is(err, errDNSDriftBlocked) {
+		slog.Warn("external DNS stopped: drift detected (clear drift to resume)")
 	}
 }
 
@@ -1490,7 +1890,7 @@ func (s *Server) startCertRenewal() {
 	if !s.cfg().SSLEnabled {
 		return
 	}
-	if len(s.cfg().DeriveSSLDomains()) == 0 {
+	if len(s.cfg().DeriveSSLDomains()) == 0 && !s.cfg().HasInstanceDomains() {
 		return
 	}
 
@@ -1519,7 +1919,13 @@ func (s *Server) startCertRenewal() {
 func (s *Server) certRenewalSweep() {
 	cfg := s.cfg()
 	sslDomains := cfg.DeriveSSLDomains()
-	if !cfg.SSLEnabled || len(sslDomains) == 0 {
+	if !cfg.SSLEnabled {
+		return
+	}
+	// Nested instances' certificates: issued here, filed apart from this
+	// hz's own, never packaged into its HAProxy (instance_tls.go).
+	s.renewInstanceCerts(cfg)
+	if len(sslDomains) == 0 {
 		return
 	}
 
@@ -1641,14 +2047,30 @@ func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 		slog.Info("dnsmasq enabled", "config", s.cfg().DNSMasqConfigPath)
 	}
 
-	// Ensure dependent services are running
-	s.ensureServicesRunning()
+	// Ensure dependent services are running. The result is kept, not logged
+	// and dropped: it decides what hz tells systemd and the monitor below.
+	states := s.ensureServicesRunning()
+
+	// Give the monitor a row per subsystem before it starts, so a subsystem
+	// that failed at boot is a failing CHECK — re-run on an interval,
+	// notified on transition, visible at /api/v1/checks and in the UI — and
+	// not three lines in a journal nobody reads.
+	s.monitor.SetSubsystems(s.subsystems.names(), s.probeSubsystem)
+
+	// A machine that already has hz's journald drop-in says so, once, before
+	// anything serves a payload. First sighting ADOPTS, never acts
+	// (logretention.go; CLAUDE.md §11).
+	s.adoptJournalRetention()
 
 	// Start background health check (every 60 seconds)
 	s.startHealthCheck()
 
-	// Reapply IP bans and start expiry goroutine
-	s.reapplyBans()
+	// Expire the bans that ran out while hz was down, then keep expiring them.
+	//
+	// Nothing re-INSTALLS a ban here any more: cfg.IPBans is the declaration
+	// and reconcileIPTables (above, on the 60s health tick) is what installs
+	// a rule that is missing. The ban path stopped running iptables in 2026-09
+	// — handlers_ban.go's header.
 	go s.startBanExpiry()
 
 	// Start Route53 background sync for dynamic IP records
@@ -1665,6 +2087,17 @@ func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 	// Start unattended cert renewal (Phase 2 prereq)
 	s.startCertRenewal()
 
+	// CHECK 1 OF THE hz-agent / PEER-SYNC GUARD (agent_fleet_guard.go).
+	//
+	// Said here, beside the loops it is about, and before they start: a machine
+	// that boots already in a fleet gets one Error line naming both features and
+	// the document, rather than an operator discovering months later that the
+	// agent they installed has been answered 409 since the day they joined a
+	// peer. The enforcement is handleAgentDesired; this is the announcement,
+	// and check 2 in applyNewConfig is the one that stops the config on disk
+	// from changing out from under it.
+	s.announceAgentGuardAtBoot()
+
 	// Start multi-instance config pull loop (no-op on primary / standalone)
 	s.startPeerSync()
 
@@ -1676,7 +2109,28 @@ func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 	s.startMFASessionPruner(mfaDone)
 	defer close(mfaDone)
 
-	slog.Info("server ready", "listen", s.cfg().EffectiveListenAddr())
+	// N4a: artifact retention (at start, then daily) and, when this hz is
+	// nested, the puller and report drainer. Both stop with the MFA pruner.
+	s.startArtifactRetention(mfaDone)
+	s.startChild(mfaDone)
+
+	// A nested hz with unsynced changes syncs once, shortly (start_sync.go):
+	// nobody is signed in to a child to press Sync.
+	s.startSyncIfPending(startSyncDelay)
+
+	// "server ready" is a claim, and it used to be made unconditionally — on a
+	// boot where WireGuard, dnsmasq and HAProxy had all failed, hz logged it
+	// anyway and systemd said `active`. hz still serves in that state on
+	// purpose (a gateway that refuses to answer because dnsmasq is down cannot
+	// be used to fix dnsmasq); it just stops saying it is fine.
+	if summary := degradedSummary(states); summary != "" {
+		slog.Warn("server ready but DEGRADED — hz is serving, subsystems are not",
+			"listen", s.cfg().EffectiveListenAddr(), "degraded", summary)
+		notifySystemd("READY=1\nSTATUS=degraded — " + summary)
+	} else {
+		slog.Info("server ready", "listen", s.cfg().EffectiveListenAddr())
+		notifySystemd("READY=1\nSTATUS=serving; all subsystems up")
+	}
 
 	server := &http.Server{
 		// EffectiveListenAddr, so a --listen override actually binds. It is not
@@ -1696,6 +2150,10 @@ func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 			errCh <- err
 		}
 	}()
+	// The second listener, on the gateway's WG address, served by the same
+	// http.Server (vpn_listener.go). Binds in the background; never fails or
+	// holds up the start.
+	vpnLn := s.startVPNListener(server)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
@@ -1705,6 +2163,7 @@ func (s *Server) RunWithTokenCallback(onNewToken func(token string)) error {
 	case <-sig:
 		slog.Info("shutting down (draining in-flight requests)")
 		s.static.Stop()
+		vpnLn.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		return server.Shutdown(ctx)

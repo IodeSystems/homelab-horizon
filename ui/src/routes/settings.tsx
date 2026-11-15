@@ -36,14 +36,19 @@ import {
   useMFASettings,
   useMFAExceptionRevoke,
   useDisableAdminToken,
+  useProjects,
   useSettings,
   useUpdateMFASettings,
 } from "../api/hooks";
 import type { HAFleetPeer } from "../api/types";
 import { SystemHealthTab } from "../components/SystemHealthTab";
 import UsersTab from "../components/UsersTab";
+import { MFAExemptList } from "../components/vpn/MFAExemptList";
 import PCITab from "../components/PCITab";
 import { IPTablesTab } from "../components/IPTablesTab";
+import NtfyCard from "../components/NtfyCard";
+import { useBuildAgents } from "../api/buildHooks";
+import { BuildAgentsSection, sourceOf } from "../components/model/BuildBits";
 
 // --- Zone Tab ---
 
@@ -769,6 +774,9 @@ function VPNMFATab() {
               <code>POST /api/v1/mfa/exception</code> (name, duration, reason).
             </Typography>
           )}
+          {mfa.data?.enabled && (
+            <MFAExemptList exempt={mfa.data.exempt ?? []} inactive={mfa.data.infraInactive ?? []} />
+          )}
         </Box>
         <Alert severity="warning" sx={{ mb: 2 }}>
           <strong>Full-tunnel peers cannot use phone-scanned passkeys.</strong>{" "}
@@ -805,10 +813,19 @@ function VPNMFATab() {
             <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
               {ALL_DURATIONS.map((d) => {
                 const active = durations.includes(d);
+                // Scope "all" drops a permanent session (config.MFADurations).
+                const off = d === "forever" && mfa.data?.scope === "all";
                 return (
                   <Chip
                     key={d}
-                    label={d === "forever" ? "Permanent" : d}
+                    disabled={off}
+                    label={
+                      d === "forever"
+                        ? off
+                          ? "Permanent (not under scope all)"
+                          : "Permanent"
+                        : d
+                    }
                     color={active ? "primary" : "default"}
                     variant={active ? "filled" : "outlined"}
                     onClick={() => {
@@ -1021,9 +1038,31 @@ function HzCliTab() {
 
 // --- Main Settings Page ---
 
+/**
+ * `?tab=ha-fleet` opens the HA Fleet tab, so /instances' [Add instance] lands
+ * on the join flow instead of rebuilding it. Only that tab is addressable;
+ * anything else opens System, as before.
+ */
+export interface SettingsSearch {
+  tab?: "ha-fleet" | "build-agents";
+}
+
+const HA_FLEET_TAB = 3;
+const BUILD_AGENTS_TAB = 8;
+
+/** The build agents: which tokens may start builds, one project each. Not machines. */
+function BuildAgentsTab() {
+  const agents = useBuildAgents();
+  const projects = useProjects();
+  return <BuildAgentsSection source={sourceOf(agents)} projects={(projects.data ?? []).map((p) => p.name)} />;
+}
+
 function SettingsPage() {
   const { data, isLoading, error } = useSettings();
-  const [tab, setTab] = useState(0);
+  const search = Route.useSearch();
+  const [tab, setTab] = useState(
+    search.tab === "ha-fleet" ? HA_FLEET_TAB : search.tab === "build-agents" ? BUILD_AGENTS_TAB : 0,
+  );
 
   if (isLoading) {
     return (
@@ -1062,6 +1101,7 @@ function SettingsPage() {
         <Tab label="Users" />
         <Tab label="PCI" />
         <Tab label="hz CLI" />
+        <Tab label="Build agents" />
       </Tabs>
 
       {tab === 0 && (
@@ -1080,6 +1120,7 @@ function SettingsPage() {
           zones={data.zones}
         />
       )}
+      {tab === 0 && <NtfyCard />}
       {tab === 0 && <AdminAccessSection vpnAdmins={data.config.vpnAdmins} />}
       {tab === 1 && (
         <HAProxyTab
@@ -1092,15 +1133,22 @@ function SettingsPage() {
         />
       )}
       {tab === 2 && <VPNMFATab />}
-      {tab === 3 && <HAFleetTab />}
+      {tab === HA_FLEET_TAB && <HAFleetTab />}
       {tab === 4 && <IPTablesTab />}
       {tab === 5 && <UsersTab />}
       {tab === 6 && <PCITab />}
       {tab === 7 && <HzCliTab />}
+      {tab === BUILD_AGENTS_TAB && <BuildAgentsTab />}
     </Box>
   );
 }
 
 export const Route = createFileRoute("/settings")({
   component: SettingsPage,
+  validateSearch: (search: Record<string, unknown>): SettingsSearch =>
+    search.tab === "ha-fleet"
+      ? { tab: "ha-fleet" }
+      : search.tab === "build-agents" || search.tab === "builders" // builders: the old link
+        ? { tab: "build-agents" }
+        : {},
 });

@@ -1,9 +1,12 @@
 package iptables
 
+// This file is part of the PURE half of the package: it turns a live rule set
+// that someone else read off the host into a verdict per rule, and parses the
+// iptables-save text that reader produces. Running iptables-save is in
+// reconcile.go, with the rest of the privileged surface.
+
 import (
 	"bufio"
-	"fmt"
-	"os/exec"
 	"strings"
 )
 
@@ -119,47 +122,34 @@ func hasKey(m map[string]struct{}, k string) bool {
 	return ok
 }
 
-// LiveRules reads horizon-managed rules from the host kernel via iptables-save.
-// Scopes the read to the chains horizon cares about; rules in other chains
-// (OUTPUT, PREROUTING, custom admin chains, etc.) are not returned — that's
-// part of the "horizon only manages what it manages" boundary.
-//
-// INPUT is narrowed further, to just the rules that jump to WG-INPUT. Unlike
-// FORWARD, a normal host's INPUT is full of ufw/docker rules that horizon has
-// no opinion about; reading them all would classify every one as "unknown" and
-// bury the IPTables tab in noise the admin can't act on.
-//
-// Returns an empty slice (not error) when iptables-save isn't available, so
-// the classifier can still run on hosts without iptables installed yet.
-func LiveRules() ([]Rule, error) {
-	natRules, err := runIptablesSave("nat", liveNatChains)
-	if err != nil {
-		return nil, fmt.Errorf("iptables-save nat: %w", err)
-	}
-	filterRules, err := runIptablesSave("filter", liveFilterChains)
-	if err != nil {
-		return nil, fmt.Errorf("iptables-save filter: %w", err)
-	}
-	return scopeLiveRules(append(natRules, filterRules...)), nil
-}
-
-// The chains LiveRules reads. PREROUTING and INPUT are narrowed further by
-// scopeLiveRules.
-var (
-	liveNatChains    = []string{"PREROUTING", "POSTROUTING", PreroutingChainName, PostroutingChainName}
-	liveFilterChains = []string{"FORWARD", ForwardChainName, InputChainName, "INPUT", ForwardsChainName}
-)
-
 // scopeLiveRules drops the rules in shared built-in chains that horizon has no
-// claim on. INPUT keeps only the jump to WG-INPUT; nat PREROUTING keeps only
-// the jump to HZ-PREROUTING. Both chains are routinely full of other tools'
-// rules — Docker puts `-m addrtype --dst-type LOCAL -j DOCKER` in PREROUTING —
-// and classifying those as "unknown" would bury the IPTables tab in rules the
-// admin cannot act on.
+// claim on. INPUT keeps the jump to WG-INPUT and source-DROP rules; nat
+// PREROUTING keeps only the jump to HZ-PREROUTING. Both chains are routinely
+// full of other tools' rules — Docker puts `-m addrtype --dst-type LOCAL -j
+// DOCKER` in PREROUTING — and classifying those as "unknown" would bury the
+// IPTables tab in rules the admin cannot act on.
+//
+// WHY INPUT ADMITS SOURCE-DROPS. `-s <addr> -j DROP` is the shape of an IP
+// ban, and a ban is a rule horizon writes (handlers_ban.go today, the agent
+// after item 12). It was outside the read scope, which is why a ban and
+// horizon's own rules could not collide — but it is also why they could not be
+// reconciled: the reconciler cannot heal, or decline to touch, a rule it never
+// reads. So the shape comes in, with BannedIPs feeding the expected set from
+// cfg.IPBans, and a ban classifies as horizon's own.
+//
+// WIDENING THE READ DOES NOT WIDEN THE DELETE, and that is the property this
+// change lives or dies on. Reconcile removes exactly one classification —
+// stale, meaning "horizon would have emitted this under the previous
+// iface/CIDR" — and nothing derives stale from a source-DROP in INPUT
+// (StaleRules says why it leaves bans out). Everything else newly visible here
+// lands in unknown or blessed, both of which are surfaced and left alone. The
+// hand-added DROP that proves it is TestReconcileLeavesAHandAddedInputDropAlone,
+// which asserts on the iptables commands issued, not on the verdict.
 func scopeLiveRules(rules []Rule) []Rule {
 	out := make([]Rule, 0, len(rules))
 	for _, r := range rules {
-		if r.Table == "filter" && r.Chain == "INPUT" && !jumpsTo(r.Args, InputChainName) {
+		if r.Table == "filter" && r.Chain == "INPUT" &&
+			!jumpsTo(r.Args, InputChainName) && !isSourceDropShape(r.Args) {
 			continue
 		}
 		if r.Table == "nat" && r.Chain == "PREROUTING" && !jumpsTo(r.Args, PreroutingChainName) {
@@ -170,6 +160,30 @@ func scopeLiveRules(rules []Rule) []Rule {
 	return out
 }
 
+// isSourceDropShape reports whether a rule body is the exact 4-token shape of
+// an IP ban: ["-s", "<addr>", "-j", "DROP"]. That is what handlers_ban.go
+// inserts (and what iptables-save prints back, with the /32 filled in), and it
+// is the only INPUT shape besides horizon's own jump that scopeLiveRules lets
+// through.
+//
+// EXACT ON PURPOSE. The token count and positions are checked rather than
+// scanned for, the same discipline isHorizonMasqShape follows: an admin's
+// `-s 192.0.2.0/24 -p tcp -j DROP`, a negated `! -s … -j DROP`, or a rule that
+// happens to mention a source somewhere are all different rules, and each one
+// admitted is a line in the IPTables tab the admin has to read past. The
+// narrowing this widens exists so that tab stays actionable.
+//
+// It does NOT check that the source is horizon's — a hand-typed DROP for an
+// address that was never banned matches this shape and is admitted. That is
+// the point: horizon can only leave a rule alone deliberately if it can see it.
+// The classifier then calls it unknown, and unknown is never deleted.
+func isSourceDropShape(args []string) bool {
+	return len(args) == 4 &&
+		args[0] == "-s" &&
+		args[2] == "-j" &&
+		args[3] == "DROP"
+}
+
 // jumpsTo reports whether a rule body ends in a jump to the named target.
 func jumpsTo(args []string, target string) bool {
 	for i := 0; i+1 < len(args); i++ {
@@ -178,19 +192,6 @@ func jumpsTo(args []string, target string) bool {
 		}
 	}
 	return false
-}
-
-// runIptablesSave executes `iptables-save -t <table>` and parses the output,
-// filtering to rules in the given chains.
-func runIptablesSave(table string, chains []string) ([]Rule, error) {
-	cmd := exec.Command("iptables-save", "-t", table)
-	out, err := cmd.Output()
-	if err != nil {
-		// iptables-save not installed, table missing, etc. Return empty so
-		// the classifier treats "no live rules" as the input.
-		return nil, nil
-	}
-	return parseIptablesSave(string(out), table, chains), nil
 }
 
 // parseIptablesSave extracts `-A <chain> <args>` lines from iptables-save

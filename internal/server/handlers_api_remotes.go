@@ -51,17 +51,20 @@ func (s *Server) handleAPIRemotes(w http.ResponseWriter, r *http.Request) {
 	out := make([]apitypes.RemoteProbeResp, 0, len(cfg.RemoteProbes))
 	for _, rp := range cfg.RemoteProbes {
 		item := apitypes.RemoteProbeResp{
-			Name:       rp.Name,
-			Mode:       rp.ProbeMode(),
-			URL:        rp.URL,
-			Enabled:    rp.Enabled,
-			Poll:       rp.Poll,
-			Probe:      rp.Probe,
-			Timeout:    rp.Timeout,
-			Resolvers:  rp.Resolvers,
-			PinSHA256:  rp.PinSHA256,
-			HasToken:   rp.Token != "",
-			CheckCount: rows[rp.Name],
+			Name:      rp.Name,
+			Mode:      rp.ProbeMode(),
+			URL:       rp.URL,
+			Enabled:   rp.Enabled,
+			Poll:      rp.Poll,
+			Probe:     rp.Probe,
+			Timeout:   rp.Timeout,
+			Resolvers: rp.Resolvers,
+			PinSHA256: rp.PinSHA256,
+			HasToken:  rp.Token != "",
+			// The alert channel is a secret: set or not, never the value.
+			HasNtfyURL:   rp.NtfyURL != "",
+			HasNtfyToken: rp.NtfyToken != "",
+			CheckCount:   rows[rp.Name],
 		}
 		if i, ok := byName[rp.Name]; ok {
 			st := live[i]
@@ -99,6 +102,8 @@ func decodeRemote(r *http.Request) (apitypes.RemoteProbeRequest, string) {
 	req.Token = strings.TrimSpace(req.Token)
 	req.PinSHA256 = strings.TrimSpace(req.PinSHA256)
 	req.OldName = strings.TrimSpace(req.OldName)
+	req.NtfyURL = strings.TrimSpace(req.NtfyURL)
+	req.NtfyToken = strings.TrimSpace(req.NtfyToken)
 
 	if req.Name == "" {
 		return req, "Name required"
@@ -119,16 +124,25 @@ func decodeRemote(r *http.Request) (apitypes.RemoteProbeRequest, string) {
 			return req, "URL must be http:// or https:// with a host"
 		}
 	}
+	// Not echoing the value: it is a secret.
+	if req.NtfyURL != "" && !probe.ValidAlertURL(req.NtfyURL) {
+		return req, "Alert topic must be an http:// or https:// URL with a host"
+	}
 	return req, ""
 }
 
-// toConfig turns a request into a config entry, carrying the stored token
-// forward when the request did not supply one.
-func toConfig(req apitypes.RemoteProbeRequest, existingToken string) config.RemoteProbe {
+// toConfig turns a request into a config entry, carrying the stored secrets
+// forward when the request did not supply them. existing is the zero value on
+// add. The vantage token is never cleared this way; the ntfy URL and token
+// are cleared only by their explicit Clear flags — an empty field is "keep",
+// because the UI never saw the stored value to send it back.
+func toConfig(req apitypes.RemoteProbeRequest, existing config.RemoteProbe) config.RemoteProbe {
 	token := req.Token
 	if token == "" {
-		token = existingToken
+		token = existing.Token
 	}
+	ntfyURL := keepOrReplace(req.NtfyURL, existing.NtfyURL, req.ClearNtfyURL)
+	ntfyToken := keepOrReplace(req.NtfyToken, existing.NtfyToken, req.ClearNtfyToken)
 	mode := config.ProbeModePush
 	if req.Mode == config.ProbeModePull {
 		mode = config.ProbeModePull
@@ -144,6 +158,21 @@ func toConfig(req apitypes.RemoteProbeRequest, existingToken string) config.Remo
 		Timeout:   req.Timeout,
 		Resolvers: req.Resolvers,
 		PinSHA256: req.PinSHA256,
+		NtfyURL:   ntfyURL,
+		NtfyToken: ntfyToken,
+	}
+}
+
+// keepOrReplace is the write-only field rule: a new value replaces, clear
+// removes, and empty keeps what is stored.
+func keepOrReplace(given, stored string, clear bool) string {
+	switch {
+	case given != "":
+		return given
+	case clear:
+		return ""
+	default:
+		return stored
 	}
 }
 
@@ -174,7 +203,7 @@ func (s *Server) handleAPIRemoteAdd(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.updateConfig(func(cfg *config.Config) {
-		cfg.RemoteProbes = append(cfg.RemoteProbes, toConfig(req, ""))
+		cfg.RemoteProbes = append(cfg.RemoteProbes, toConfig(req, config.RemoteProbe{}))
 	}); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -220,7 +249,7 @@ func (s *Server) handleAPIRemoteUpdate(w http.ResponseWriter, r *http.Request) {
 	if err := s.updateConfig(func(cfg *config.Config) {
 		for i, rp := range cfg.RemoteProbes {
 			if rp.Name == target {
-				cfg.RemoteProbes[i] = toConfig(req, rp.Token)
+				cfg.RemoteProbes[i] = toConfig(req, rp)
 				found = true
 				break
 			}

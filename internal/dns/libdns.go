@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/libdns/libdns"
+
+	"github.com/iodesystems/homelab-horizon/internal/config"
 )
 
 // LibdnsProvider is the interface that libdns providers must implement
@@ -131,11 +134,11 @@ func (p *LibdnsAdapter) GetRecord(zoneID, name, recordType string) (*Record, err
 
 	for _, r := range records {
 		rr := r.RR()
-		if rr.Name == relName && rr.Type == recordType {
+		if unescapeDNSName(rr.Name) == relName && rr.Type == recordType {
 			return &Record{
 				Name:   name,
 				Type:   rr.Type,
-				Value:  rr.Data,
+				Value:  config.CanonicalRecordValue(rr.Type, rr.Data),
 				TTL:    int(rr.TTL.Seconds()),
 				ZoneID: zoneID,
 			}, nil
@@ -144,6 +147,32 @@ func (p *LibdnsAdapter) GetRecord(zoneID, name, recordType string) (*Record, err
 
 	return nil, nil // Not found
 }
+
+// unescapeDNSName decodes the \ooo octal escapes a provider may return in a
+// record name. Route53 lists `*.beta.example.com` as `\052.beta.example.com.`
+// and libdns/route53 v1.6.2 unescapes TXT values only, so a wildcard read back
+// never matched the name hz wrote: every sync reported the write unconfirmed.
+// Anything that is not a valid 3-digit octal escape is kept as written.
+func unescapeDNSName(name string) string {
+	if !strings.Contains(name, `\`) {
+		return name
+	}
+	var sb strings.Builder
+	for i := 0; i < len(name); i++ {
+		if name[i] == '\\' && i+3 < len(name) && isOctal(name[i+1]) && isOctal(name[i+2]) && isOctal(name[i+3]) {
+			v := (int(name[i+1]-'0') << 6) | (int(name[i+2]-'0') << 3) | int(name[i+3]-'0')
+			if v <= 0xff {
+				sb.WriteByte(byte(v))
+				i += 3
+				continue
+			}
+		}
+		sb.WriteByte(name[i])
+	}
+	return sb.String()
+}
+
+func isOctal(c byte) bool { return c >= '0' && c <= '7' }
 
 // ListRecords returns every record live in the zone at the provider.
 func (p *LibdnsAdapter) ListRecords(zoneID string) ([]Record, error) {
@@ -161,7 +190,7 @@ func (p *LibdnsAdapter) ListRecords(zoneID string) ([]Record, error) {
 		out = append(out, Record{
 			Name:   p.toFQDN(rr.Name),
 			Type:   rr.Type,
-			Value:  rr.Data,
+			Value:  config.CanonicalRecordValue(rr.Type, rr.Data),
 			TTL:    int(rr.TTL.Seconds()),
 			ZoneID: zoneID,
 		})
@@ -225,13 +254,34 @@ func (p *LibdnsAdapter) DeleteRecord(zoneID, name, recordType string) error {
 
 	relName := p.toRelativeName(name)
 
-	// Use RR with empty Data to match any value for this name/type
-	_, err := p.provider.DeleteRecords(ctx, p.zone, []libdns.Record{
-		libdns.RR{
-			Name: relName,
-			Type: recordType,
-		},
-	})
+	// Delete the records the provider itself reports, never a wildcard.
+	//
+	// libdns documents an RR with empty Data as "any value at this name and
+	// type", and this used to rely on it. libdns/route53 v1.6.2 does not honour
+	// it: processRecordSetDeletion matches deletions by exact Data, so "" matched
+	// nothing, every live value landed in "remaining", and the set was UPSERTed
+	// back unchanged — a delete that returned nil and deleted nothing. A
+	// tombstone was logged "retracted" while Route53 kept serving the record
+	// (2026-10-08). Handing back the provider's own records (its Data, TTL and,
+	// for Cloudflare, its ID) is the exact match every provider supports.
+	existing, err := p.provider.GetRecords(ctx, p.zone)
+	if err != nil {
+		p.log(fmt.Sprintf("Delete %s FAILED: %v", name, err))
+		return fmt.Errorf("failed to read records before delete: %w", err)
+	}
+	var doomed []libdns.Record
+	for _, r := range existing {
+		rr := r.RR()
+		if p.sameName(rr.Name, relName) && strings.EqualFold(rr.Type, recordType) {
+			doomed = append(doomed, r)
+		}
+	}
+	if len(doomed) == 0 {
+		p.log(fmt.Sprintf("Delete %s: nothing live", name))
+		return nil
+	}
+
+	_, err = p.provider.DeleteRecords(ctx, p.zone, doomed)
 	if err != nil {
 		p.log(fmt.Sprintf("Delete %s FAILED: %v", name, err))
 		return fmt.Errorf("failed to delete record: %w", err)
@@ -261,7 +311,7 @@ func (p *LibdnsAdapter) SyncRecord(zoneID string, record Record) (changed bool, 
 	// value would leave a stale TTL in place until the address next changed —
 	// precisely the moment it is too late to shorten anything. A caller that
 	// leaves TTL unset is not asking for one, so it is not churned.
-	if currentRecord.Value == record.Value &&
+	if currentRecord.Value == config.CanonicalRecordValue(record.Type, record.Value) &&
 		(record.TTL <= 0 || currentRecord.TTL == record.TTL) {
 		p.log(fmt.Sprintf("%s already set to %s (ttl %ds)", record.Name, record.Value, currentRecord.TTL))
 		return false, nil
@@ -277,10 +327,6 @@ func (p *LibdnsAdapter) SyncRecord(zoneID string, record Record) (changed bool, 
 func (p *LibdnsAdapter) SyncRecordSet(zoneID string, records []Record) (changed bool, err error) {
 	if len(records) == 0 {
 		return false, nil
-	}
-	// Single record: delegate to SyncRecord
-	if len(records) == 1 {
-		return p.SyncRecord(zoneID, records[0])
 	}
 
 	name := records[0].Name
@@ -301,15 +347,23 @@ func (p *LibdnsAdapter) SyncRecordSet(zoneID string, records []Record) (changed 
 	var existingValues []string
 	for _, r := range existing {
 		rr := r.RR()
-		if rr.Name == relName && rr.Type == recordType {
-			existingValues = append(existingValues, rr.Data)
+		if unescapeDNSName(rr.Name) == relName && rr.Type == recordType {
+			existingValues = append(existingValues, config.CanonicalRecordValue(rr.Type, rr.Data))
 		}
+	}
+
+	// One value replacing at most one: delegate to SyncRecord, which also
+	// compares the TTL. With more than one live it would compare only the
+	// first it finds, call a {a, b} -> {a} change a no-op, and leave b
+	// published.
+	if len(records) == 1 && len(existingValues) <= 1 {
+		return p.SyncRecord(zoneID, records[0])
 	}
 
 	// Check if values match (order-independent)
 	newValues := make([]string, len(records))
 	for i, r := range records {
-		newValues[i] = r.Value
+		newValues[i] = config.CanonicalRecordValue(r.Type, r.Value)
 	}
 	if stringSlicesEqual(existingValues, newValues) {
 		p.log(fmt.Sprintf("%s already set to %v", name, newValues))
@@ -380,9 +434,24 @@ func (p *LibdnsAdapter) toRelativeName(name string) string {
 	return name
 }
 
+// sameName reports whether two names denote the same owner in this zone,
+// whatever form each is in: relative ("www"), FQDN with or without the
+// trailing dot, the apex as "@", "" or the zone name, and any letter case.
+func (p *LibdnsAdapter) sameName(a, b string) bool {
+	norm := func(n string) string {
+		n = p.toRelativeName(strings.ToLower(strings.TrimSpace(unescapeDNSName(n))))
+		if n == "" {
+			return "@"
+		}
+		return n
+	}
+	return norm(a) == norm(b)
+}
+
 // toFQDN converts a libdns relative name back to a fully-qualified name in
 // this zone. "@" (or empty) is the zone apex.
 func (p *LibdnsAdapter) toFQDN(name string) string {
+	name = unescapeDNSName(name)
 	zoneName := strings.TrimSuffix(p.zone, ".")
 	if name == "" || name == "@" {
 		return zoneName
@@ -426,11 +495,46 @@ func (p *LibdnsAdapter) toLibdnsRecord(record Record) (libdns.Record, error) {
 			Target: target,
 		}, nil
 
+	case "NS":
+		// A delegation's nameserver: written fully qualified, compared without
+		// the dot (CanonicalRecordValue), the same as a CNAME target.
+		target := record.Value
+		if !strings.HasSuffix(target, ".") {
+			target += "."
+		}
+		return libdns.NS{
+			Name:   relName,
+			TTL:    ttl,
+			Target: target,
+		}, nil
+
 	case "TXT":
 		return libdns.TXT{
 			Name: relName,
 			TTL:  ttl,
 			Text: record.Value,
+		}, nil
+
+	case "MX":
+		// "<preference> <host>"; the host is written fully qualified, the same
+		// as a CNAME target, and compared without the dot (CanonicalRecordValue).
+		fields := strings.Fields(record.Value)
+		if len(fields) != 2 {
+			return nil, fmt.Errorf("invalid MX value %q: want \"<preference> <host>\"", record.Value)
+		}
+		pref, err := strconv.ParseUint(fields[0], 10, 16)
+		if err != nil {
+			return nil, fmt.Errorf("invalid MX preference %q: %w", fields[0], err)
+		}
+		target := fields[1]
+		if !strings.HasSuffix(target, ".") {
+			target += "."
+		}
+		return libdns.MX{
+			Name:       relName,
+			TTL:        ttl,
+			Preference: uint16(pref),
+			Target:     target,
 		}, nil
 
 	default:

@@ -1,0 +1,11 @@
+# Managed by homelab-horizon: segment iode-net. Edits are overwritten.
+# wg(8) format for `wg syncconf`, not wg-quick. It holds no private key:
+# the key was minted on this machine, stays on it, and hz-agent loads it.
+[Interface]
+
+[Peer]
+# gw-1
+PublicKey = 8AQZQtkyrdjWkUHvaVMTAFDOP/o3gDfiIECAkq2bdU0=
+AllowedIPs = 10.42.0.0/24
+Endpoint = gw.example.invalid:51820
+PersistentKeepalive = 25

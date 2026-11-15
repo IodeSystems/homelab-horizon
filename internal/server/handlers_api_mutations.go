@@ -92,7 +92,26 @@ func forwardsResp(in []config.Forward) []apitypes.ServiceForward {
 	return out
 }
 
+// requestPlacement reads the two optional placement fields off a service
+// request, falling back to what the record already says.
+//
+// nil means "leave it alone" — see ServiceRequest.Project for why these are
+// pointers — so the fallback is what makes an edit from a client that does not
+// know about the tree (the web UI, today) leave the assignment untouched rather
+// than clearing it.
+func requestPlacement(req *apitypes.ServiceRequest, current config.Service) (project, environment string) {
+	project, environment = current.Project, current.Environment
+	if req.Project != nil {
+		project = strings.TrimSpace(*req.Project)
+	}
+	if req.Environment != nil {
+		environment = strings.TrimSpace(*req.Environment)
+	}
+	return project, environment
+}
+
 func serviceRequestToService(req *apitypes.ServiceRequest) config.Service {
+	project, environment := requestPlacement(req, config.Service{})
 	svc := config.Service{
 		Name:          req.Name,
 		Domains:       req.Domains,
@@ -100,6 +119,8 @@ func serviceRequestToService(req *apitypes.ServiceRequest) config.Service {
 		Dormant:       req.Dormant,
 		DormantReason: req.DormantReason,
 		Forwards:      requestForwards(req.Forwards),
+		Project:       project,
+		Environment:   environment,
 	}
 	if req.InternalDNS != nil && req.InternalDNS.IP != "" {
 		svc.InternalDNS = &config.InternalDNS{IP: req.InternalDNS.IP}
@@ -190,6 +211,17 @@ func (s *Server) handleAPIAddService(w http.ResponseWriter, r *http.Request) {
 	req.Domains = domains
 
 	svc := serviceRequestToService(&req)
+	// Minted here, not at the next restart: the create answer carries it.
+	svc.EnsureToken()
+
+	// Placement is checked BEFORE updateConfig, which stores the new config and
+	// only then saves it: a service naming an undeclared project would be live
+	// by the time Save refused it, and the operator would meet the refusal as a
+	// raw validator string rather than the command that declares the project.
+	if err := s.cfg().CheckAssignment(svc.Name, svc.Project, svc.Environment); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	var addErr error
 	if err := s.updateConfig(func(cfg *config.Config) {
@@ -205,7 +237,15 @@ func (s *Server) handleAPIAddService(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.syncServices()
-	writeJSONOK(w)
+	added := svc
+	for i := range s.cfg().Services {
+		if s.cfg().Services[i].Name == svc.Name {
+			added = s.cfg().Services[i]
+			break
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(apitypes.ServiceAddResp{OK: true, ServiceIntegration: serviceIntegration(&added, s.integrationBaseURL(r))})
 }
 
 // PUT /api/v1/services/edit
@@ -238,8 +278,32 @@ func (s *Server) handleAPIEditService(w http.ResponseWriter, r *http.Request) {
 			domains = append(domains, d)
 		}
 	}
+	// Before updateConfig, which stores before Save validates.
+	for _, d := range domains {
+		if err := s.cfg().ServiceDomainDelegationError(req.Name, d); err != nil {
+			writeJSONError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 
 	forwards := requestForwards(req.Forwards)
+
+	// Placement, resolved against the record as it stands and checked before
+	// anything is stored — updateConfig publishes first and saves second, so an
+	// undeclared project would go live before Save refused it. A request that
+	// names neither field (every web-UI edit) resolves to what is already there,
+	// which is what keeps an edit from quietly unassigning a service.
+	var project, environment string
+	for _, svc := range s.cfg().Services {
+		if svc.Name == req.OriginalName {
+			project, environment = requestPlacement(&req, svc)
+			if err := s.cfg().CheckAssignment(req.Name, project, environment); err != nil {
+				writeJSONError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			break
+		}
+	}
 
 	var found bool
 	var editErr error
@@ -258,6 +322,8 @@ func (s *Server) handleAPIEditService(w http.ResponseWriter, r *http.Request) {
 			cfg.Services[i].Name = req.Name
 			cfg.Services[i].Domains = domains
 			cfg.Services[i].Forwards = forwards
+			cfg.Services[i].Project = project
+			cfg.Services[i].Environment = environment
 
 			// Internal DNS
 			if req.InternalDNS != nil && req.InternalDNS.IP != "" {
@@ -656,6 +722,10 @@ func (s *Server) handleAPIAddSubZone(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			}
+			if err := cfg.Zones[i].SubZoneDelegationError(subZone); err != nil {
+				writeJSONError(w, http.StatusBadRequest, err.Error())
+				return
+			}
 			break
 		}
 	}
@@ -799,6 +869,10 @@ func (s *Server) handleAPIDomainSSLAdd(w http.ResponseWriter, r *http.Request) {
 			writeJSONError(w, http.StatusConflict, "SSL coverage already exists")
 			return
 		}
+	}
+	if err := zone.SubZoneDelegationError(subZone); err != nil {
+		writeJSONError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	// Add SubZone to the zone

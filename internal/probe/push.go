@@ -24,6 +24,10 @@ const pushBatchLimit = 500
 // away the public address, the inbound rule, the self-signed certificate and
 // the pinning, because hz's endpoint has an ordinary CA certificate that
 // verifies normally.
+//
+// The vantage may also hold a notification URL of its own (Alert), which is
+// not an hz credential: it is how the vantage says "hz is down" when hz,
+// the only other notifier, is the thing that is down.
 type Pusher struct {
 	// URL is hz's base, e.g. https://kiosk.vpn.example.com.
 	URL string
@@ -35,7 +39,74 @@ type Pusher struct {
 	// Timeout bounds one report. Zero means 30 seconds.
 	Timeout time.Duration
 
+	// Alert, when set, notifies a human after consecutive failed reports and
+	// again on recovery — "hz unreachable", or "hz rejects this vantage" when
+	// hz answers 401/403 (see Alerter). Nil is off. It never affects what is reported or
+	// acknowledged.
+	//
+	// PRECEDENCE: an Alert set when PushLoop starts is this host's own — a
+	// file, the environment or a flag — and it WINS over the channel hz
+	// hands out; hz does not override what the host's operator said. Nil at
+	// start, Alert follows hz's channel instead: built from the Agent's
+	// cached copy at boot, re-aimed or dropped by each accepted reply.
+	Alert *Alerter
+
+	// AlertThreshold is Threshold for an Alerter built from hz's channel.
+	// Zero means defaultAlertAfter.
+	AlertThreshold int
+
+	// UpdateFlag, when set, is where the agent raises update-wanted once it
+	// has seen the same differing build on every accepted report for
+	// UpdateSettle (see update_wanted.go). Empty is off. The flag is a
+	// request to a root updater that asks hz for itself; it names nothing.
+	UpdateFlag string
+
+	// hostAlert records that Alert was set before PushLoop started.
+	hostAlert bool
+
+	// update times the differing build hz reports.
+	update UpdateWatch
+
 	http *http.Client
+}
+
+// followChannel points p's alerter at ch, unless the host pinned its own.
+// nil switches alerting off. An existing alerter is re-aimed in place, so an
+// open alert keeps its state and its recovery still goes out.
+func (p *Pusher) followChannel(ch *AlertChannel, vantage string) {
+	if p.hostAlert {
+		return
+	}
+	switch {
+	case ch == nil:
+		p.Alert = nil
+	case p.Alert == nil:
+		p.Alert = &Alerter{URL: ch.URL, Token: ch.Token, Vantage: vantage, Threshold: p.AlertThreshold}
+	default:
+		p.Alert.URL, p.Alert.Token = ch.URL, ch.Token
+	}
+}
+
+// acceptChannel takes the alert channel from an ACCEPTED reply: cache it, or
+// clear the cache when the reply carries none, and follow it. A failed report
+// never reaches here, so it changes nothing — the cache is what alerting runs
+// on while hz is down. Values are never logged.
+func (a *Agent) acceptChannel(p *Pusher, ch *AlertChannel) {
+	if ch != nil && !ValidAlertURL(ch.URL) {
+		slog.Warn("probe: hz sent an alert channel that is not an http(s) URL with a host; keeping the one held")
+		return
+	}
+	if a.SetAlertChannel(ch) {
+		switch {
+		case ch == nil:
+			slog.Info("probe: hz cleared this vantage's alert channel")
+		case p.hostAlert:
+			slog.Info("probe: hz sent an alert channel; cached, but this host's own ntfy URL wins")
+		default:
+			slog.Info("probe: hz set this vantage's alert channel; alerting there", "ntfy_token", ch.Token != "")
+		}
+	}
+	p.followChannel(ch, a.vantage)
 }
 
 func (p *Pusher) client() *http.Client {
@@ -75,7 +146,7 @@ func (p *Pusher) Report(ctx context.Context, req PushRequest) (*PushResponse, er
 
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, fmt.Errorf("hz returned %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+		return nil, &HTTPError{Status: resp.StatusCode, Message: hzMessage(msg)}
 	}
 
 	var out PushResponse
@@ -83,6 +154,56 @@ func (p *Pusher) Report(ctx context.Context, req PushRequest) (*PushResponse, er
 		return nil, fmt.Errorf("could not read hz's response: %w", err)
 	}
 	return &out, nil
+}
+
+// HTTPError is hz ANSWERING a report with something other than 200. It is a
+// type so the alerter can tell "hz said no" from "hz is not there" without
+// matching on error text. A transport error is never an *HTTPError.
+type HTTPError struct {
+	Status  int    // hz's HTTP status
+	Message string // hz's own words: the "error" field of its JSON body, or the body
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("hz returned %d: %s", e.Status, e.Message)
+}
+
+// Rejected reports whether hz refused this vantage itself (401 or 403): its
+// token is not one hz accepts — rotated, or the vantage was removed from hz.
+// That is a different fault from hz being down, with a different fix, so it
+// is a different alert.
+func (e *HTTPError) Rejected() bool {
+	return e.Status == http.StatusUnauthorized || e.Status == http.StatusForbidden
+}
+
+// hzMessage is the text of an error body: the "error" field of hz's JSON
+// errors (writeJSONError), or the trimmed body when it is anything else.
+func hzMessage(body []byte) string {
+	var j struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &j) == nil && j.Error != "" {
+		return j.Error
+	}
+	return strings.TrimSpace(string(body))
+}
+
+// observeVersion feeds one accepted report to the update watch and raises
+// the flag when it says so. A flag that cannot be written is logged; the
+// daily timer is still there.
+func (p *Pusher) observeVersion(running, expected string, now time.Time) {
+	if p.UpdateFlag == "" || !p.update.Observe(running, expected, now) {
+		return
+	}
+	_, since := p.update.Expected()
+	if err := WriteUpdateFlag(p.UpdateFlag, now); err != nil {
+		slog.Warn("probe: could not raise update-wanted; the daily update timer still runs",
+			"path", p.UpdateFlag, "error", err)
+		return
+	}
+	slog.Info("probe: hz has held a different build for the settle time; raised update-wanted for the root updater",
+		"running", running, "available", expected, "since", since.UTC().Format(time.RFC3339),
+		"settle", UpdateSettle, "path", p.UpdateFlag)
 }
 
 // PushLoop reports to hz on an interval until ctx is done.
@@ -97,6 +218,11 @@ func (a *Agent) PushLoop(ctx context.Context, p *Pusher, interval time.Duration)
 
 	// sent is the watermark of what hz has acknowledged.
 	var sent time.Time
+
+	// Boot from the cached channel: hz may be the thing that is down, and
+	// that is when the alert matters. Never discarded for age (CLAUDE.md #5).
+	p.hostAlert = p.Alert != nil
+	p.followChannel(a.AlertChannel(), a.vantage)
 
 	for {
 		next := interval
@@ -116,7 +242,10 @@ func (a *Agent) PushLoop(ctx context.Context, p *Pusher, interval time.Duration)
 			// Keep the watermark where it is; the batch goes again next time.
 			slog.Warn("probe: could not report to hz",
 				"error", err, "buffered", len(results))
+			p.Alert.Failed(ctx, err)
 		default:
+			p.Alert.Succeeded(ctx)
+			a.acceptChannel(p, resp.Alert)
 			if resp.Targets != nil {
 				a.SetTargets(*resp.Targets)
 				slog.Info("probe: hz sent a new target set",
@@ -130,6 +259,7 @@ func (a *Agent) PushLoop(ctx context.Context, p *Pusher, interval time.Duration)
 				slog.Warn("probe: this agent is not the build hz holds — update it",
 					"running", a.version, "available", resp.AgentVersion)
 			}
+			p.observeVersion(a.version, resp.AgentVersion, time.Now())
 			if resp.Notice != "" {
 				slog.Warn("probe: notice from hz", "notice", resp.Notice)
 			}

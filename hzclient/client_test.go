@@ -467,7 +467,6 @@ func allCalls(c *Client) []namedCall {
 			_, err := c.SetSlotState(ctx, SlotNext, StateUp)
 			return err
 		}},
-		{"DeploySwap", func(ctx context.Context) error { _, err := c.DeploySwap(ctx); return err }},
 		{"MaintPageSet", func(ctx context.Context) error { _, err := c.MaintPageSet(ctx, "<h1>brb</h1>"); return err }},
 		{"MaintPageClear", func(ctx context.Context) error { _, err := c.MaintPageClear(ctx); return err }},
 		{"BanAdd", func(ctx context.Context) error { return c.BanAdd(ctx, "1.2.3.4", 0, "spam") }},

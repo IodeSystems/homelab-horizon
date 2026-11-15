@@ -1,3 +1,13 @@
+/**
+ * `/ports` — the unscoped Ports tab: every host's reservations, and the
+ * allocation denylist, whoever owns them (plan/design/ui.md, Decision 1,
+ * amendment 6).
+ *
+ * `AddExclusionDialog` is exported so `/p/$project/ports` can open the same
+ * form prefilled with its project — the reservations side has no such dialog
+ * because a reservation is never declared directly: it comes from a service,
+ * so its Add action is `AddServiceDialog` (`services.tsx`).
+ */
 import { useMemo, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import {
@@ -10,6 +20,7 @@ import {
   DialogContent,
   DialogTitle,
   IconButton,
+  MenuItem,
   Paper,
   Snackbar,
   Table,
@@ -18,16 +29,17 @@ import {
   TableContainer,
   TableHead,
   TableRow,
-  Tab,
-  Tabs,
   TextField,
   Typography,
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import EditIcon from "@mui/icons-material/Edit";
 import DeleteIcon from "@mui/icons-material/Delete";
-import { usePorts, useSaveCustomExclusions } from "../api/hooks";
+import { usePorts, useProjects, useSaveCustomExclusions } from "../api/hooks";
 import type { HostPortEntry, PortRange } from "../api/types";
+import { buildProjectIndex, type ProjectIndex } from "../components/model/projectRoutes.ts";
+import { PROJECT_COLUMN_LABEL } from "../components/model/ProjectBits";
+import { LocationCell } from "../components/model/ProjectBits";
 
 // --- Shared bits ---
 
@@ -52,7 +64,15 @@ function portSortKey(port: string): number {
   return Number.isNaN(n) ? Infinity : n;
 }
 
-function HostReservationsCard({ host, entries }: { host: string; entries: HostPortEntry[] }) {
+function HostReservationsCard({
+  host,
+  entries,
+  index,
+}: {
+  host: string;
+  entries: HostPortEntry[];
+  index: ProjectIndex;
+}) {
   const sorted = useMemo(
     () => [...entries].sort((a, b) => portSortKey(a.port) - portSortKey(b.port)),
     [entries],
@@ -76,6 +96,7 @@ function HostReservationsCard({ host, entries }: { host: string; entries: HostPo
               <TableCell>Proto</TableCell>
               <TableCell>Service</TableCell>
               <TableCell>Domain</TableCell>
+              <TableCell>{PROJECT_COLUMN_LABEL}</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -89,6 +110,9 @@ function HostReservationsCard({ host, entries }: { host: string; entries: HostPo
                     {e.domain ?? "—"}
                   </Typography>
                 </TableCell>
+                <TableCell>
+                  <LocationCell project={e.project} index={index} />
+                </TableCell>
               </TableRow>
             ))}
           </TableBody>
@@ -98,7 +122,7 @@ function HostReservationsCard({ host, entries }: { host: string; entries: HostPo
   );
 }
 
-function ReservationsTab({ hosts }: { hosts: Record<string, HostPortEntry[]> }) {
+function ReservationsTab({ hosts, index }: { hosts: Record<string, HostPortEntry[]>; index: ProjectIndex }) {
   const hostKeys = useMemo(() => Object.keys(hosts).sort(), [hosts]);
 
   if (hostKeys.length === 0) {
@@ -112,7 +136,7 @@ function ReservationsTab({ hosts }: { hosts: Record<string, HostPortEntry[]> }) 
   return (
     <Box>
       {hostKeys.map((host) => (
-        <HostReservationsCard key={host} host={host} entries={hosts[host] ?? []} />
+        <HostReservationsCard key={host} host={host} entries={hosts[host] ?? []} index={index} />
       ))}
     </Box>
   );
@@ -127,7 +151,7 @@ function BuiltinExclusionsTable({ ranges }: { ranges: PortRange[] }) {
         Built-in
       </Typography>
       <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
-        Server defaults — always applied.
+        Server defaults — always applied, global, not editable.
       </Typography>
       <TableContainer component={Paper} variant="outlined">
         <Table size="small">
@@ -169,10 +193,12 @@ interface RangeFormState {
   from: string;
   to: string;
   note: string;
+  /** `""` is global. */
+  project: string;
 }
 
 function rangeToForm(r: PortRange): RangeFormState {
-  return { from: String(r.from), to: r.to ? String(r.to) : "", note: r.note ?? "" };
+  return { from: String(r.from), to: r.to ? String(r.to) : "", note: r.note ?? "", project: r.project ?? "" };
 }
 
 function formToRange(f: RangeFormState): PortRange | null {
@@ -183,6 +209,8 @@ function formToRange(f: RangeFormState): PortRange | null {
   if (!Number.isNaN(to) && to >= from) range.to = to;
   const note = f.note.trim();
   if (note) range.note = note;
+  const project = f.project.trim();
+  if (project) range.project = project;
   return range;
 }
 
@@ -194,6 +222,12 @@ function canSubmitRange(f: RangeFormState): boolean {
     if (Number.isNaN(to) || to < from) return false;
   }
   return true;
+}
+
+/** Every declared project, plus "global" first — what the select offers. */
+function useProjectOptions(): string[] {
+  const projects = useProjects();
+  return useMemo(() => (projects.data ?? []).map((p) => p.name).sort(), [projects.data]);
 }
 
 function RangeFormDialog({
@@ -212,6 +246,7 @@ function RangeFormDialog({
   isSubmitting: boolean;
 }) {
   const [form, setForm] = useState<RangeFormState>(initialValues);
+  const projectNames = useProjectOptions();
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
@@ -244,6 +279,22 @@ function RangeFormDialog({
           size="small"
           fullWidth
         />
+        <TextField
+          select
+          label="Project"
+          value={form.project}
+          onChange={(e) => setForm((f) => ({ ...f, project: e.target.value }))}
+          size="small"
+          fullWidth
+          helperText="Global denies the port to every project. Allocation ignores this either way."
+        >
+          <MenuItem value="">global</MenuItem>
+          {projectNames.map((p) => (
+            <MenuItem key={p} value={p}>
+              {p}
+            </MenuItem>
+          ))}
+        </TextField>
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose} disabled={isSubmitting}>
@@ -258,6 +309,49 @@ function RangeFormDialog({
         </Button>
       </DialogActions>
     </Dialog>
+  );
+}
+
+/**
+ * The Add Exclusion dialog, reused from a project's Ports tab — `project`
+ * prefills and stays editable, unlike `AddServiceDialog`'s fixed project: an
+ * exclusion's project is optional and "global" is itself a legal choice.
+ */
+export function AddExclusionDialog({
+  project,
+  onClose,
+}: {
+  project?: string;
+  onClose: () => void;
+}) {
+  const { data } = usePorts();
+  const saveCustom = useSaveCustomExclusions();
+  const [error, setError] = useState("");
+  const custom = data?.exclusions.custom ?? [];
+
+  return (
+    <>
+      <RangeFormDialog
+        open
+        title={project ? `Add exclusion to ${project}` : "Add exclusion"}
+        initialValues={{ from: "", to: "", note: "", project: project ?? "" }}
+        onClose={onClose}
+        onSubmit={(form) => {
+          const range = formToRange(form);
+          if (!range) return;
+          saveCustom.mutate([...custom, range], {
+            onSuccess: onClose,
+            onError: (err) => setError(err.message),
+          });
+        }}
+        isSubmitting={saveCustom.isPending}
+      />
+      <Snackbar open={error !== ""} autoHideDuration={8000} onClose={() => setError("")}>
+        <Alert severity="error" onClose={() => setError("")}>
+          {error}
+        </Alert>
+      </Snackbar>
+    </>
   );
 }
 
@@ -297,11 +391,13 @@ function DeleteRangeDialog({
 
 function CustomExclusionsTable({
   custom,
+  index,
   onAdd,
   onEdit,
   onDelete,
 }: {
   custom: PortRange[];
+  index: ProjectIndex;
   onAdd: () => void;
   onEdit: (index: number) => void;
   onDelete: (index: number) => void;
@@ -326,13 +422,14 @@ function CustomExclusionsTable({
             <TableRow>
               <TableCell>Range</TableCell>
               <TableCell>Note</TableCell>
+              <TableCell>{PROJECT_COLUMN_LABEL}</TableCell>
               <TableCell align="right">Actions</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
             {custom.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={3} align="center">
+                <TableCell colSpan={4} align="center">
                   <Typography variant="body2" color="text.secondary" sx={{ py: 4 }}>
                     No custom exclusions.
                   </Typography>
@@ -346,6 +443,9 @@ function CustomExclusionsTable({
                     <Typography variant="body2" color={r.note ? "text.primary" : "text.secondary"}>
                       {r.note ?? "—"}
                     </Typography>
+                  </TableCell>
+                  <TableCell>
+                    <LocationCell project={r.project ?? ""} index={index} />
                   </TableCell>
                   <TableCell align="right">
                     <IconButton size="small" onClick={() => onEdit(i)}>
@@ -368,10 +468,12 @@ function CustomExclusionsTable({
 function ExclusionsTab({
   builtin,
   custom,
+  index,
   showSnack,
 }: {
   builtin: PortRange[];
   custom: PortRange[];
+  index: ProjectIndex;
   showSnack: (message: string, severity: "success" | "error") => void;
 }) {
   const saveCustom = useSaveCustomExclusions();
@@ -381,18 +483,6 @@ function ExclusionsTab({
 
   const editTarget = editIndex != null ? custom[editIndex] : undefined;
   const deleteTarget = deleteIndex != null ? custom[deleteIndex] : undefined;
-
-  const handleAdd = (form: RangeFormState) => {
-    const range = formToRange(form);
-    if (!range) return;
-    saveCustom.mutate([...custom, range], {
-      onSuccess: () => {
-        setAddOpen(false);
-        showSnack("Exclusion added", "success");
-      },
-      onError: (err) => showSnack(err.message, "error"),
-    });
-  };
 
   const handleEdit = (form: RangeFormState) => {
     if (editIndex == null) return;
@@ -425,19 +515,18 @@ function ExclusionsTab({
       <BuiltinExclusionsTable ranges={builtin} />
       <CustomExclusionsTable
         custom={custom}
+        index={index}
         onAdd={() => setAddOpen(true)}
         onEdit={setEditIndex}
         onDelete={setDeleteIndex}
       />
 
       {addOpen && (
-        <RangeFormDialog
-          open
-          title="Add Exclusion"
-          initialValues={{ from: "", to: "", note: "" }}
-          onClose={() => setAddOpen(false)}
-          onSubmit={handleAdd}
-          isSubmitting={saveCustom.isPending}
+        <AddExclusionDialog
+          onClose={() => {
+            setAddOpen(false);
+            showSnack("Exclusion added", "success");
+          }}
         />
       )}
       {editTarget && (
@@ -465,7 +554,8 @@ function ExclusionsTab({
 
 function PortsPage() {
   const { data, isLoading, error } = usePorts();
-  const [tab, setTab] = useState(0);
+  const projects = useProjects();
+  const index = useMemo(() => buildProjectIndex(projects.data ?? []), [projects.data]);
   const [snack, setSnack] = useState<SnackState>({ open: false, message: "", severity: "success" });
   const showSnack = (message: string, severity: "success" | "error") =>
     setSnack({ open: true, message, severity });
@@ -490,31 +580,22 @@ function PortsPage() {
         <Typography variant="h5" sx={{ fontWeight: 600 }}>
           Ports
         </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-          Reserved ports by host, and the denylist <code>hz ports next</code> skips when
-          allocating new backends.
-        </Typography>
       </Box>
 
-      <Tabs
-        value={tab}
-        onChange={(_, v) => setTab(v)}
-        variant="scrollable"
-        scrollButtons="auto"
-        sx={{ mb: 3, borderBottom: 1, borderColor: "divider" }}
-      >
-        <Tab label="Reservations" />
-        <Tab label="Exclusions" />
-      </Tabs>
+      <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1 }}>
+        Reservations
+      </Typography>
+      <ReservationsTab hosts={data.hosts} index={index} />
 
-      {tab === 0 && <ReservationsTab hosts={data.hosts} />}
-      {tab === 1 && (
-        <ExclusionsTab
-          builtin={data.exclusions.builtin}
-          custom={data.exclusions.custom}
-          showSnack={showSnack}
-        />
-      )}
+      <Typography variant="subtitle1" sx={{ fontWeight: 600, mt: 4, mb: 1 }}>
+        Exclusions
+      </Typography>
+      <ExclusionsTab
+        builtin={data.exclusions.builtin}
+        custom={data.exclusions.custom}
+        index={index}
+        showSnack={showSnack}
+      />
 
       <Snackbar
         open={snack.open}
