@@ -15,7 +15,7 @@ go 1.26.0
 // 1.27.1 is the floor (raised by Renovate on main); v0.5.0 was built and
 // tested with go1.27.3. Raise it when govulncheck reports a newer stdlib fix; the sibling redline module pins
 // its own floor at 1.26.5 for the same reason and by the same method.
-toolchain go1.27.1
+toolchain go1.27.4
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.47.1
