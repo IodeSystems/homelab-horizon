@@ -4,7 +4,7 @@ import (
 	"github.com/iodesystems/homelab-horizon/internal/config"
 )
 
-// Where a rung's placements are answered from (plan/design/estate.md Part A
+// Where a rung's placements are answered from (docs/design/estate.md Part A
 // §5, "a rung placed elsewhere").
 //
 // Two states, and neither is "unknown". PlacementHere means THIS hz holds the

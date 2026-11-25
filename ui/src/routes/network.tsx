@@ -2,12 +2,12 @@
  * `/network` — the Network tab with no project selected. Every segment hz
  * declares.
  *
- * `Network` is one of the six tabs that exist at every scope (plan/design/ui.md,
+ * `Network` is one of the six tabs that exist at every scope (docs/design/ui.md,
  * Decision 1, amendment 5): the tab promises that a word means the same thing
  * wherever it appears, which it cannot do if the surface only exists inside a
  * project. Unscoped shows every row; a project narrows them.
  *
- * It is also the screen `plan/design/ui.md` already specified as *"Network —
+ * It is also the screen `docs/design/ui.md` already specified as *"Network —
  * who can reach what?"*: the segment table, gateway-wide, with the owner on
  * every row. The bridge report it also asks for is NOT here — that needs a
  * multi-segment-machine derivation hz does not serve yet, and inventing it from
@@ -18,7 +18,7 @@
  * ("which project at all") on a gateway-wide list, `LOCATION_COLUMN_LABEL`
  * ("where in this subtree") on a scoped one.
  *
- * ADD/EDIT/REMOVE landed here alongside the read (`plan/design/ui.md`'s own
+ * ADD/EDIT/REMOVE landed here alongside the read (`docs/design/ui.md`'s own
  * "unreachable endpoints" list named `/segments/{add,set,rm}`): the same
  * finding `ProjectDialogs.tsx` made for `/projects/{add,rm}`, and the same
  * reference pattern applied — `SegmentDialogs.tsx`.

@@ -1,5 +1,5 @@
 /**
- * `/p/$project/bans` — the IP bans tab inside a project (plan/design/ui.md,
+ * `/p/$project/bans` — the IP bans tab inside a project (docs/design/ui.md,
  * Decision 1, amendment 6). Rows whose `project` is in scope; `""` is global
  * and shows only on the unscoped `/bans` tab.
  *

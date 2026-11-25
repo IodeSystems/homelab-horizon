@@ -12,7 +12,7 @@
  * rendered "global" and never blank — `OwnerCell`, not `LocationCell`: see
  * `ProjectBits.tsx` for why the empty case is not "unassigned".
  *
- * Three states this screen must not flatten (plan/design/example-projection.md §4):
+ * Three states this screen must not flatten (docs/design/example-projection.md §4):
  *
  *   A machine that hosts NOTHING is not silent. A build box with a segment, an
  *   agent and a healthy poll has nothing to report an observed version FOR,

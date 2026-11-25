@@ -24,7 +24,7 @@ import (
 //   - a FILE, when systemd started it as the agent-managed unit. There is no
 //     parent to push anything, so hz declares the map as a file in the agent
 //     payload (internal/server/static_unit.go) and the agent restarts the unit
-//     when the file moves. See plan/design/privilege-audit.md §7.1 decision 3.
+//     when the file moves. See docs/design/privilege-audit.md §7.1 decision 3.
 //
 // The handler is the same object either way: only where the map comes from
 // changes, which is why the child survives the supervisor's retirement rather

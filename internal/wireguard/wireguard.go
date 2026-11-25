@@ -2,7 +2,7 @@
 // configuration, and owns the iptables chains that policy the tunnel.
 //
 // The package is split along one seam, and the split is load-bearing for the
-// hz-agent work (plan/design/architecture.md, "hz-agent de-roots the hz web surface"):
+// hz-agent work (docs/design/architecture.md, "hz-agent de-roots the hz web surface"):
 //
 //	render.go     pure     desired state in, bytes out. No files, no commands,
 //	                       no clock, no environment — and no key generation.
@@ -21,14 +21,14 @@
 // WGConfig does, and it sources it from /etc/wireguard/<iface>.conf, which is
 // still the state of record. That is deliberate and it is the limit of this
 // refactor: moving the peer set into hz's own store is a model change
-// (plan/design/architecture.md phase 4, items 13–15 — Segments, and VPNRange going
+// (docs/design/architecture.md phase 4, items 13–15 — Segments, and VPNRange going
 // plural), not a file split. What changed is that nothing *computing* a config
 // reads the disk any more: WGConfig reads once, ParseConfig turns the bytes
 // into values, and every renderer takes those values as arguments.
 //
 // # Where commit-confirmed will hook in
 //
-// plan/design/architecture.md: a machine config that breaks the network severs the
+// docs/design/architecture.md: a machine config that breaks the network severs the
 // agent from hz, and there is no path back but physical access. In this package
 // the functions that can cut that link are, in order of danger:
 //

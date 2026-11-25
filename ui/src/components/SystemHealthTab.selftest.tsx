@@ -4,7 +4,7 @@
  * Two checks on this page lost their button on 2026-09-25 and kept their
  * diagnosis, because the endpoints behind them worked by piping an hz-built
  * shell string through `systemd-run … bash -c` to escape hz's own sandbox
- * (plan/design/privilege-audit.md §7 A, §5.2 rules 1 and 3). What has to
+ * (docs/design/privilege-audit.md §7 A, §5.2 rules 1 and 3). What has to
  * survive that is not the code — tsc already checks the code — but three
  * properties of the rendered page, each of which is one edit from gone and
  * none of which anything else measures:

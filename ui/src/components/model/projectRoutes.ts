@@ -6,7 +6,7 @@
  * the answers for DISTINCTNESS; `projectRoutes.render.selftest.tsx` proves they
  * reach the page through the real router.
  *
- * # The rules these functions serve (plan/design/ui.md, Decision 1, amendment 5)
+ * # The rules these functions serve (docs/design/ui.md, Decision 1, amendment 5)
  *
  * **The sidebar says WHERE; the tabs say WHAT.** The sidebar is the project
  * tree plus a fixed gateway group, and it is the same at every scope. The six
@@ -35,7 +35,7 @@
  * (illegible the moment the row is pasted into a ticket by someone who does not
  * know which page it came from).
  *
- * Names in examples are placeholders from plan/design/example-projection.md;
+ * Names in examples are placeholders from docs/design/example-projection.md;
  * homelab-horizon is a public repo.
  */
 import type { ProjectResp } from "../../api/generated-types";
@@ -483,7 +483,7 @@ export interface ScopeTab {
 }
 
 /**
- * THE SIX TABS — THE SAME SIX AT EVERY SCOPE (plan/design/ui.md, Decision 1,
+ * THE SIX TABS — THE SAME SIX AT EVERY SCOPE (docs/design/ui.md, Decision 1,
  * amendment 5).
  *
  * The sidebar says WHERE you are (the project tree, or no project); the tabs

@@ -152,7 +152,7 @@ func newInstallDepsCmd(opts *serveOpts) *cobra.Command {
 // changes the box in a way that bounces a daemon, so it is asked for by name
 // rather than happening as a side effect of an install or a web request. hz
 // still DIAGNOSES this on the System Health card — the card now names this
-// command where it used to have a button (plan/design/privilege-audit.md §7 A,
+// command where it used to have a button (docs/design/privilege-audit.md §7 A,
 // "Move /haproxy/fix-logging to provisioning; keep the diagnosis card").
 func newFixHAProxyLoggingCmd(opts *serveOpts) *cobra.Command {
 	return &cobra.Command{

@@ -12,7 +12,7 @@ import (
 	"github.com/iodesystems/homelab-horizon/internal/config"
 )
 
-// The attribution write surface (plan/design/ui.md, Decision 1 amendment 6):
+// The attribution write surface (docs/design/ui.md, Decision 1 amendment 6):
 // every add/edit accepts an optional project, "" is global, and a named
 // project that is not declared is refused with 400 BEFORE any side effect.
 

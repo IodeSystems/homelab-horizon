@@ -11,7 +11,7 @@ import (
 
 // hz DECLARES the static file server as a unit; it does not start one.
 //
-// THE DECISION (plan/design/privilege-audit.md §7.1 decision 3, the operator,
+// THE DECISION (docs/design/privilege-audit.md §7.1 decision 3, the operator,
 // 2026-09-25): static serving after the flip is "a separate agent-managed
 // unit". hz stops forking a privileged child, the agent declares and manages
 // the unit, and the privilege separation the fork provides today is preserved
@@ -144,7 +144,7 @@ UMask=0077
 # There is deliberately no [Install] section, so "systemctl enable hz-static"
 # has nothing to hook onto and refuses. hz still forks its own static child;
 # two servers on one loopback port is how the sites go down. See
-# plan/design/privilege-audit.md §7.A — the commit that deletes the supervisor
+# docs/design/privilege-audit.md §7.A — the commit that deletes the supervisor
 # is the commit that adds this section.
 `
 

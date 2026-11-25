@@ -1,5 +1,5 @@
 /**
- * Overview — "is anything waiting on me?" (plan/design/ui.md, "The screens").
+ * Overview — "is anything waiting on me?" (docs/design/ui.md, "The screens").
  *
  * plan/plan.md, Tier 2: "Dashboard → the ranked queue. Needs no new backend
  * record: `rankFleet` in the drift screen already implements the ordering.

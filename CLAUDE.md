@@ -5,7 +5,7 @@ person cannot be on call for their own orchestrator; every rule below follows
 from that.
 
 Code map: `AGENTS.md`. Work queue and release: `plan/plan.md`. Design detail:
-`plan/design/`. **This file is the constitution** — extracted 2026-09-24 from
+`docs/design/`. **This file is the constitution** — extracted 2026-09-24 from
 doc prose and Go doc comments, because every agent working here had to be told
 it in a prompt. Each rule states where it is enforced; **an invariant with no
 enforcement point says so**, and that is a finding, not a formality.
@@ -64,7 +64,7 @@ only (`:147,735,791`).
 a whole rung's secrets; a TLS server key authenticates one hostname at one
 machine's own edge. The **ACME account key and the DNS provider credentials
 never cross** — the agent receives *issued* material, not the power to issue.
-(`plan/design/architecture.md`, "Cert material and the two channels".)
+(`docs/design/architecture.md`, "Cert material and the two channels".)
 
 ## 4 · hz holds no private key — for the config manager. Not an absolute.
 
@@ -97,7 +97,7 @@ key never cross.
 ## 5 · Nothing in the boot path may depend on freshness.
 
 Services here run unattended for years. This has killed at least two proposals
-(leases, TUF-style expiry) — `plan/design/config-manager.md:52-92`.
+(leases, TUF-style expiry) — `docs/design/config-manager.md:52-92`.
 
 `configmgr/client.go:360,388-392`: on anything but `ErrDenied`, boot from
 last-known-good cache and log `LOUD`. `configmgr/state.go:56-59` — *"A
@@ -119,7 +119,7 @@ instance, never a machine. Enforced:
 exact field list, and no environment field under any spelling), `:63`.
 
 **A machine MAY name an owning project — responsibility, not placement.**
-Amended 2026-09-26 (`plan/design/ui.md`, Decision 1 amendment 6). `""` is
+Amended 2026-09-26 (`docs/design/ui.md`, Decision 1 amendment 6). `""` is
 global. A machine owned by one project may host instances of others, and those
 read as crossings. A named owner must be declared (`internal/config/config.go:755-765`,
 enforced `internal/config/attribution_test.go:34`); removing the project
@@ -129,7 +129,7 @@ Attribution changes no rendered artifact and no projection:
 
 ❓ **Live contradiction, unsettled, the operator's call:** `Segment.Project` is
 REQUIRED (`internal/config/segment.go:69-75`, enforced `:249` and `:456`) while
-`plan/design/example-projection.md:114` asserts `seg:people` has none. Both
+`docs/design/example-projection.md:114` asserts `seg:people` has none. Both
 cannot be true. It blocks "the VPN becomes a segment row".
 
 ## 7 · Declare, then enrol. A box cannot declare itself.

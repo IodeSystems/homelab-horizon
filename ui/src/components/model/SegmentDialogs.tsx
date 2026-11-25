@@ -1,6 +1,6 @@
 /**
  * Declaring, editing and removing a segment, from the Network screen at both
- * scopes (`plan/design/ui.md`, Decision 1 amendment 5 — Network is one of the
+ * scopes (`docs/design/ui.md`, Decision 1 amendment 5 — Network is one of the
  * six tabs that exist at every scope, and `SegmentBits.tsx` is the one table
  * both screens render).
  *

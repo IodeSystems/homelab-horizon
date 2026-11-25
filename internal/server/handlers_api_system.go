@@ -137,7 +137,7 @@ func (s *Server) handleAPISystemHealth(w http.ResponseWriter, r *http.Request) {
 	// hz READS this and does not repair it. POST /api/v1/haproxy/fix-logging
 	// used to, by piping an hz-built shell string through systemd-run to escape
 	// hz's own sandbox; it moved to `sudo homelab-horizon fix-haproxy-logging`
-	// and the card names that command (plan/design/privilege-audit.md §7 A,
+	// and the card names that command (docs/design/privilege-audit.md §7 A,
 	// "keep the diagnosis card").
 	//
 	// FOUR states cross the wire, not two booleans. The old pair reported

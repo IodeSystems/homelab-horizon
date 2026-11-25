@@ -1,7 +1,7 @@
 /**
  * `/config` — the Config tab with no project selected.
  *
- * (plan/design/ui.md, Decision 1, amendment 5 — reverses Decision L.) Config is
+ * (docs/design/ui.md, Decision 1, amendment 5 — reverses Decision L.) Config is
  * one of the six tabs, so it exists at every scope. The two panels that LIST
  * registrations show every project's: `/api/v1/cm/registrations` already
  * returns all of them (filtered only by state), and each row names its project.

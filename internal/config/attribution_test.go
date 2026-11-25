@@ -6,7 +6,7 @@ import (
 )
 
 // Attribution: every section of the system is attributed to a project, or is
-// global (plan/design/ui.md, Decision 1 amendment 6). "" is global and always
+// global (docs/design/ui.md, Decision 1 amendment 6). "" is global and always
 // legal; a named project has to be declared; removing a project re-attributes
 // what named it to global and never deletes it.
 

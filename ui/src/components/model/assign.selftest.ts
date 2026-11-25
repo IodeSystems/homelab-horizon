@@ -10,7 +10,7 @@
  *     the request `Save()` is obliged to reject
  *   · a refusal arriving as one blob, with the command that fixes it truncated
  *
- * Names are placeholders from plan/design/example-projection.md.
+ * Names are placeholders from docs/design/example-projection.md.
  */
 import type { EnvironmentResp, ProjectResp } from "../../api/generated-types";
 import {

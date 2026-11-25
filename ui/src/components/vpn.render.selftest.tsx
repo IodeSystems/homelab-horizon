@@ -1,6 +1,6 @@
 /**
  * The VPN tab, rendered through the real router — the amendment 6 attribution
- * work (`plan/design/ui.md`, Decision 1, amendment 6): `/p/$project/vpn` shows
+ * work (`docs/design/ui.md`, Decision 1, amendment 6): `/p/$project/vpn` shows
  * only that project's clients (with an Add flow), and the unscoped `/vpn`
  * gained a Project column that renders the empty string as GLOBAL, never blank
  * (CLAUDE.md invariant 2 — empty and unknown are different states, and here

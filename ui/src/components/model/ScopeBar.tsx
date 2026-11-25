@@ -1,7 +1,7 @@
 /**
  * THE SCOPE BAR — WHAT YOU ARE LOOKING AT, AND WHERE THAT IS.
  *
- * (plan/design/ui.md, Decision 1, amendment 5.) A breadcrumb over six tabs,
+ * (docs/design/ui.md, Decision 1, amendment 5.) A breadcrumb over six tabs,
  * drawn by the shell above every scoped screen — the six unscoped ones and
  * everything under `/p/<name>`. A gateway screen has no tab and gets no bar.
  *

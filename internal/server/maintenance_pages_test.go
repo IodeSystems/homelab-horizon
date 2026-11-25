@@ -17,7 +17,7 @@ import (
 // THE BYTE-IDENTICAL PROOF FOR THE HAPROXY ERRORS DIRECTORY.
 //
 // Two writers fill that directory today and will until hz stops writing files
-// at all (item 12 step 5, plan/design/privilege-audit.md §7.B):
+// at all (item 12 step 5, docs/design/privilege-audit.md §7.B):
 //
 //	hz     haproxy.WriteConfig' 503 stanza + Config.WriteMaintenancePageFiles
 //	agent  the HAProxySection's Files, plus the prune its Dirs claim allows

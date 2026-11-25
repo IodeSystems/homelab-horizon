@@ -77,7 +77,7 @@ const (
 //
 // This is the seam's answer to the first of this package's fights: the file on
 // disk is still the state of record (moving that is a model change, not this
-// refactor — plan/design/architecture.md phase 4, items 13–15), but *parsing* it is
+// refactor — docs/design/architecture.md phase 4, items 13–15), but *parsing* it is
 // pure and *holding* it is the manager's job. Nothing below this line reads a
 // file to find out what the peers are; WGConfig does that once and passes the
 // result in.
@@ -172,7 +172,7 @@ func extractValue(line string) string {
 // hz's own writer (EnableIPForwarding, apply.go) and the payload hz serves the
 // agent (internal/server/ipforward.go) have to put the same bytes in the same
 // two places, because BOTH run on the gateway until item 12 step 5
-// (plan/design/privilege-audit.md §7 B). So the names and the contents are
+// (docs/design/privilege-audit.md §7 B). So the names and the contents are
 // stated once, here, in the pure half — the same discipline
 // config.MaintenancePagePattern and haproxy.Error503Path follow, and for the
 // same reason: two spellings of one fact are two things free to disagree.

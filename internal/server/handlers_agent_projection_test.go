@@ -444,7 +444,7 @@ func TestTheGapsCrossTheWire(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // The config generation, over the real config store
-// (plan/design/estate.md §3, item 17)
+// (docs/design/estate.md §3, item 17)
 // ---------------------------------------------------------------------------
 
 // bless writes a config at an address the way an operator does, open-ended

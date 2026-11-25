@@ -2,7 +2,7 @@
  * The two pieces every tab is built from now: a header row with the tab's one
  * action, and a one-line empty state that offers the same action.
  *
- * plan/design/ui.md, Decision 1, amendment 6 — the operator's brief: *"if
+ * docs/design/ui.md, Decision 1, amendment 6 — the operator's brief: *"if
  * there's no machines, just have a table that says: 'no machines attributed to
  * this project, [add a machine]' and have the add modal do the rest."* So a tab
  * does not explain its model in prose. It says what is there, or says in one

@@ -126,7 +126,7 @@ var (
 	// ErrRejected means hz served a config that opened, and Options.Accept
 	// refused it. It takes the cached-boot path like any other unusable
 	// answer, and it is never cached: a bad blessing must not replace a good
-	// last-known-good (plan/design/config-manager.md: "a config that fails
+	// last-known-good (docs/design/config-manager.md: "a config that fails
 	// validation falls back to cache, loudly").
 	ErrRejected = errors.New("config rejected by the application")
 )

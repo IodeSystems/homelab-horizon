@@ -93,7 +93,7 @@ func planWireGuard(o subsystemObservation) subsystemPlan {
 		// explicit act by a human at the box: `sudo hz-agent wg-create-config`,
 		// which refuses outright if the file is already there. hz will not do
 		// it from an HTTP request at all any more — the endpoint that used to
-		// is gone (plan/design/privilege-audit.md §7 A, §3.1 #5).
+		// is gone (docs/design/privilege-audit.md §7 A, §3.1 #5).
 		p.Skip = fmt.Sprintf("WireGuard is not configured: %s does not exist. "+
 			"Create it on this host with: sudo hz-agent wg-create-config. "+
 			"Nothing is generated automatically "+

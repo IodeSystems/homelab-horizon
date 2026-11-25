@@ -16,7 +16,7 @@ import (
 	"github.com/iodesystems/homelab-horizon/internal/wireguard"
 )
 
-// ATTRIBUTION CHANGES NO RENDERED ARTIFACT (plan/design/ui.md, Decision 1
+// ATTRIBUTION CHANGES NO RENDERED ARTIFACT (docs/design/ui.md, Decision 1
 // amendment 6; CLAUDE.md invariant 6).
 //
 // Attribution is organisational. Every gateway-wide render — HAProxy, dnsmasq,

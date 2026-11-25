@@ -1,7 +1,7 @@
 /**
  * `/p/$project` — the layout every project-scoped screen sits inside.
  *
- * The job (plan/design/ui.md, Decision 1, amendment 5): a project scopes a URL.
+ * The job (docs/design/ui.md, Decision 1, amendment 5): a project scopes a URL.
  * `/p/<name>/<tab>`, where the name is the project's bare name — unique across
  * the config, so no dotted path and no ambiguity. The breadcrumb and the six
  * tabs are drawn by the shell (`ScopeBar`), not here, because the unscoped

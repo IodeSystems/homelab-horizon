@@ -13,17 +13,17 @@ import (
 // WHAT IS DELIBERATELY ABSENT, because each absence is the model's shape rather
 // than a field nobody got round to:
 //
-//   - NO ENVIRONMENT. plan/design/architecture.md, "Instance, not machine,
+//   - NO ENVIRONMENT. docs/design/architecture.md, "Instance, not machine,
 //     carries the environment": *an environment never modifies a machine; it
 //     is a coordinate of an instance*. The instance carries (project,
 //     environment, app, role); this record carries who the box is.
 //     TestAMachineCarriesNoEnvironment pins it, and pins the exact field set.
 //
-//   - Project IS PRESENT, and it is NOT placement (plan/design/ui.md, Decision
+//   - Project IS PRESENT, and it is NOT placement (docs/design/ui.md, Decision
 //     1 amendment 6, which amended CLAUDE.md invariant 6). It names the project
 //     RESPONSIBLE for the box — who answers for it — and "" is global. It says
 //     nothing about what the box hosts: the gateway in
-//     plan/design/example-projection.md §3 hosts instances from two projects
+//     docs/design/example-projection.md §3 hosts instances from two projects
 //     whatever its owner is, and an instance of another project on an owned
 //     machine reads as a crossing. No renderer and no projection reads it
 //     (TestAttributionChangesNoRenderedArtifact, internal/server).

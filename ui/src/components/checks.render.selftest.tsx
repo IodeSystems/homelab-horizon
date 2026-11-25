@@ -1,5 +1,5 @@
 /**
- * Assertions for the Checks tab, driven through the real router (plan/design/ui.md,
+ * Assertions for the Checks tab, driven through the real router (docs/design/ui.md,
  * Decision 1, amendment 6).
  *
  * Same harness as `model/projectRoutes.render.selftest.tsx`: the real

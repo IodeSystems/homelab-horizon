@@ -976,7 +976,7 @@ func TestResolveZeroMatchesReturnsNamedError(t *testing.T) {
 
 // A closed range only covers what it was blessed for. A rollback past it must
 // pick up whatever else still reaches, which is exactly the scenario
-// plan/design/config-manager.md calls out.
+// docs/design/config-manager.md calls out.
 func TestResolveOpenEndedVsClosedMaxVer(t *testing.T) {
 	ctx := context.Background()
 	d := open(t)

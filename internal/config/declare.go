@@ -12,7 +12,7 @@ import (
 // payload onto a node that already exists. Neither of them can CREATE the node,
 // so until this file landed the only way to declare a project or a rung was
 // `hz import --execute` or an editor on config.json — and step 2 of the
-// acceptance walkthrough in plan/design/architecture.md ("redline declares its own
+// acceptance walkthrough in docs/design/architecture.md ("redline declares its own
 // environments: staging, prod") had no command at all.
 //
 // The order these enforce is the one legacy_compat_test.go pins from the other
@@ -116,7 +116,7 @@ func (c *Config) AddProject(name, parent string) error {
 // record the operator did not name, so it is listed).
 //
 // ATTRIBUTED RECORDS — machines, VPN clients, checks, bans and port exclusions
-// naming a doomed project (plan/design/ui.md, Decision 1 amendment 6) — are
+// naming a doomed project (docs/design/ui.md, Decision 1 amendment 6) — are
 // dependants too, and block without cascade like everything else. With cascade
 // they are RE-ATTRIBUTED TO GLOBAL, never deleted: attribution is organisational,
 // and removing a project must not take a machine, a client or a ban with it.

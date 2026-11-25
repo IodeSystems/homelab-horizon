@@ -1,0 +1,1330 @@
+# Architecture — what hz is growing into
+
+> Design doc, not a work queue. The model, the boundaries, and the path from
+> what exists to what this describes. Active slices live in
+> [plan.md](../../plan/plan.md); the config layer's own design is
+> [config-manager.md](config-manager.md).
+>
+> Written 2026-09-20 from a design session. Every "today" claim below is
+> grounded in a file reference — check them before trusting them.
+>
+> **AMENDED 2026-09-23 by
+> [estate.md](estate.md) Part A.** This document
+> assumes exactly ONE hz instance and never says so. The estate is two: a
+> registry/promotion plane and a light prod gateway that reaches up to it. That
+> amendment also carries the **config generation** — the missing link between
+> "a config was blessed" and "the unit restarted" — and promotes item 15
+> (segments) from optional to required. Read it alongside "The model" and "The
+> path" below.
+
+## The goal
+
+One tool takes a project from *"I have a name"* to *"it runs in production
+with real money, real isolation and a paper trail"*, and the operator never
+runs a second tool.
+
+What makes it not Kubernetes: **hz computes desired state and publishes it.
+Agents pull it and apply it locally.** hz never reaches into a machine. A
+control plane is something you are on call for; a registry is something you
+consult. One person cannot be on call for their own orchestrator.
+
+Properties this should let us assert:
+
+1. A new project costs a name and a domain. Dev works in minutes.
+2. Growing up is a step, not a project — `staging`, then `prod`, each one
+   command plus one machine.
+3. No secret exists in plaintext on the dev box. Bootstrap is one credential
+   placed at provision time.
+4. Any box answers *what am I, what version, what config, who approved it* —
+   and hz answers it for every box at once.
+5. The artifact that ran in staging is the artifact in prod, byte for byte.
+6. A config key cannot be silently absent.
+7. hz holds no inbound credential for any machine — no ssh keys, no push — and
+   runs as root on none of them, its own box included.
+
+Property 6 is the founding bug: an empty `BACKUP_BUCKET` selecting the
+production bucket, because absent and empty were indistinguishable.
+
+## The model
+
+```
+Project      tree; the network boundary; the config inheritance path
+Environment  project + name + posture + from + version        a rung
+Machine      identity; one or more segment memberships
+Instance     machine + project + environment + app + role      the address
+Version      environment declares · instance reports · nobody reconciles
+Config       resolved for (address, version), sealed per environment
+Service      domain + TLS + DNS → backends                     the entry point
+```
+
+### Environment is a posture plus a placement
+
+- **Posture** — committed, non-secret, declares what must be *true*: money real
+  or simulated, sends delivered or logged, PII present or not. Enforced at boot.
+- **Placement** — which machines, which key, which network.
+
+A rung is real only when both halves exist. redline's `prod` has the posture
+and no placement, which is why it is the interesting case.
+
+| rung | boundary it adds | keys | consequences |
+|---|---|---|---|
+| **dev** | none — your box, your files | plaintext, local | none |
+| **staging** | machine — it runs elsewhere | env key, approval | simulated, but holds real PII |
+| **prod** | trust — separate segment, no dev path in | separate key staging cannot read | real, enforced at boot |
+
+Staging is stricter about *data* than its posture suggests: it carries a
+production restore, so real families' records sit on a box that charges
+nothing. "Staging is prod with fake keys" is wrong here.
+
+**Rung is not target.** `loadtest`, `virgin` and `multipass` are disposable
+machines borrowing a posture — lateral, not upward. Keeping the distinction is
+what stops the ladder degenerating into a list of every VM ever made. redline
+already encodes both, as `PROFILE_<x>` and `DEPLOY_HOSTS_<x>`.
+
+### Instance, not machine, carries the environment
+
+An environment never modifies a machine. It is a coordinate of an instance.
+Three addressable things, and collapsing any two is where the confusion comes
+from:
+
+```
+Machine     identity, enrollment key, apt sources, segment membership
+Instance    (project, environment, app, role) — the config address
+Placement   port, state dir, unit name, slot — machine-local, never in hz
+```
+
+So `redline@staging.service` and `redline@prod.service` can share a box: same
+binary, different instance, different config address, different state dir.
+Nothing about the machine record changes.
+
+**Consequence for redline's slots.** `--service current|next` currently picks
+the slot *and* the config file. Those split: both slots are the same instance
+with the same config — they have to be, rolling only works if the halves are
+interchangeable. The slot keeps only placement (`ADDR`, `WEB_ROOT`). Which
+deletes `current.secret.properties` / `next.secret.properties` entirely.
+
+### Service is the entry point, and it is not 1:1 with anything
+
+```
+Instance = machine + project + env + app + role     the logical unit on a box
+Backend  = one slot's host:port                     what haproxy connects to
+Service  = domain + TLS + DNS → backends            the entry point
+```
+
+- **Many backends, one service** — `current`:6400 and `next`:6402 already are
+  two backends of one instance; under `balance first` next is listed first and serves whenever it is up (owner, 2026-10-29), and the rolling sequence moves both onto new code.
+- **Many services, one instance** — apex, `www`, a client vanity domain.
+- **Instances with no service** — `redline/*/redline/ops` on :6404 is
+  loopback-only. Workers and cron roles likewise. If instance and Service were
+  one record, every unrouted process would need a fake domain.
+
+Today a Service holds the route *and* one backend host:port, with promote to
+swap it — a backend set of size one, plus a pointer. The model needs a set.
+That becomes load-bearing the first time a service fronts two machines, and not
+before.
+
+## Two channels
+
+The agent must never hold an environment key.
+
+```
+hz → agent   machine config   network, units, desired version   non-secret
+hz → app     sealed config    (project, env, app, role)         app holds the key
+```
+
+A compromised agent gets a machine's network shape, not its secrets. That is
+the difference between a bad day and a breach — and it lets the agent run as
+root without root being the thing that reads production credentials.
+
+### Cert material and the two channels (2026-09-21)
+
+"The agent must never hold an environment key" is a rule about ONE key. It is
+tempting to read it as "no secret ever crosses to an agent", and the WireGuard
+section already proves that reading wrong — `wg0.conf` carries the machine's
+private key and `internal/agent` models, redacts and applies it. But arguing
+from that precedent is arguing by analogy, so here is the reasoning for
+certificates on its own terms.
+
+**An environment key and a TLS server key are different classes.** An
+environment key decrypts the config of *every instance in that environment* —
+its blast radius is a whole rung's secrets, and it is held by apps, not
+machines. A TLS server key authenticates *one hostname at one machine's edge*.
+The machine terminates TLS with it; it is on that box by construction, and
+nothing else is reachable through it. Losing one costs a certificate
+revocation. Losing the other is the rung.
+
+**So certificate material may cross, under five constraints:**
+
+1. **Only the machine's own material, and only the SERVED bundle.** What
+   crosses is `/etc/haproxy/certs/<base>.pem` — the leaf plus key HAProxy
+   loads, which is exactly what the edge needs and nothing more. NOT
+   `/etc/letsencrypt/live/**`: that is the record of issuance, not the thing
+   being served, and it belongs with whatever talks to the CA.
+2. **The ACME ACCOUNT key never crosses**, and neither do the DNS provider
+   credentials. Those are the environment-key-shaped things here: a Route53
+   token can rewrite a zone, and the account key is the subscriber identity
+   that can mint more certificates. Issuance stays with hz. The agent receives
+   *issued* material; it does not get the power to issue. That is strictly
+   safer than the alternative of letting each agent renew its own, which would
+   put a DNS-zone credential on every machine.
+3. **`Secret` is forced by the payload, not declared by the producer.**
+   `Desired.files()` already sets `f.Secret = true` on every WireGuard file
+   "whether or not the producer remembered to say so"; a certificate section
+   gets the same treatment, with `diff.go`'s pattern redaction as the second
+   layer. A diff report that is unsafe to print is a diff report nobody runs.
+4. **The admin path comes off `handleAgentDesired` FIRST.** ✅ Done
+   2026-09-21 with item 12 step 2: `|| s.isAdmin(r)` is gone and an hz admin
+   session gets a 401 there. A cert section inherits that, and must not put it
+   back.
+5. **Hashed into the fingerprint, never into a log.** Secret contents are
+   hashed like everything else — they must be, or a rotated key would not move
+   the generation — and a hash discloses nothing.
+
+**What this does NOT weaken.** After all five, a compromised agent holds the
+edge key for the hostnames its own box already serves. It still cannot read any
+app's config, cannot issue a new certificate, and cannot touch another
+machine's material. "A compromised agent gets a machine's shape, not its
+secrets" becomes "…not its *environment's* secrets", which is the claim that
+was doing the work.
+
+**Why there is an agent at all**, given that `config-manager.md` decided
+against one: config's consumer is the app, so an in-process library works.
+WireGuard's consumer is the kernel — it needs root and it must exist *before*
+the app starts. No in-process library can do that. So network sync needs a
+privileged on-box component and config still does not. The agent owns
+interfaces, routes, firewall rules, packages and units. It never touches app
+config.
+
+**The agent polls. hz never initiates.** That keeps property 7: hz holds no ssh
+keys and no inbound credential, it works behind NAT (which prod will be), and
+it is the shape `configmgr` already uses — register, wait for approval,
+resolve. A compromised hz can serve bad desired-state to boxes that ask; it
+cannot reach a box that does not, and it cannot replace the agent binary on a
+box already enrolled — that comes from apt, held (see *Agent identity*).
+
+**A REPORT BACK IS THE SAME DIRECTION, and it is worth saying rather than
+assuming.** `POST /api/v1/agent/observed` (2026-09-21) does not weaken this
+rule: the agent dials, on its own clock, with its own credential. hz opens
+nothing, holds no inbound credential and needs no route to the box, so a
+machine behind NAT reports exactly as it polls. What "hz never initiates"
+rules out is hz *reaching* a machine. What crosses is the agent's PLAN — never
+its `Observed`, which is raw file contents — plus the live firewall rule set
+hz can no longer read for itself after item 12. See
+`privilege-classification.md` §4.1 for the redaction, retention and state
+decisions.
+
+## The projection
+
+```
+project(global, machineID) → MachineConfig      pure function, no I/O
+sync(MachineConfig)                             agent, local only
+```
+
+Purity is the point: unit-testable with no machine anywhere, diffable (*what
+would change on box X*) before anything changes, and hz stays declarative.
+
+```go
+type MachineConfig struct {
+    Machine  string
+    Segments []Segment     // wg interface, range, peers, allowed IPs
+    Forwards []Forward     // declared exceptions — default deny between own interfaces
+    Hosts    []HostEntry   // /etc/hosts
+    Packages []Package     // name + exact version + hold
+    Units    []Unit        // which instance units exist and are enabled
+    Serial   uint64        // monotonic floor, same rollback defence as configmgr
+}
+```
+
+**hz already is this, for exactly one machine.** `internal/haproxy`,
+`internal/dnsmasq` and `internal/iptables` are all `render(global) → local
+files → reload`, hardcoded to the local box. The generalisation is a machine
+parameter and a transport.
+
+**sync reconciles, it does not apply.** The discipline is already house style
+— `internal/haproxy/mfa_jail_test.go:189`: *"identical contents must not report
+changed — that reloads HAProxy for nothing."* Compute the diff, touch what
+moved, reload what is stale. Otherwise every poll bounces WireGuard.
+
+**Network changes need commit-confirmed.** A machine config that breaks the
+network severs the agent from hz, and there is no path back but physical access
+— prod is remote, behind a segment, in someone else's datacenter.
+
+```
+apply → must re-reach hz within N seconds → else roll back to the previous Serial
+```
+
+One timer and one saved copy. Everything else in `MachineConfig` can fail
+forward safely; only `Segments` and `Forwards` can cut the line that carries the
+fix.
+
+## Segments
+
+> **A segment's identity is under revision.** The operator's model is that a
+> **realm** (an addressing realm — LAN, VPN, site-b) *contains* segments, so
+> identity becomes `(realm, segment)` and `redline` can exist in both the LAN
+> realm and the VPN realm. What that does to every rule below — interface
+> uniqueness, CIDR overlap, the multi-homing note, IP ban scoping — and the
+> decisions it leaves open are worked out in
+> [estate.md](estate.md) Part B. This section still describes what hz
+> enforces today.
+
+A project's machines form a network segment. `code` has machines, `redline` has
+machines, and those are different segments. This is what makes `Parent`
+load-bearing — today it records the tree and confers nothing, by deliberate
+choice (see `wt/projects`).
+
+```
+project tree → config inheritance path
+project      → network segment, machines peer within it
+```
+
+Hub and spoke, and the hub is hz's own box.
+
+**Shape inherits, secrets do not.** Config is sealed per environment key. If a
+definition at `iodesystems` applied to redline's machines, a redline/staging box
+would have to unwrap a root-level key and environment isolation is gone. So
+non-secret definitions cascade down the tree; sealed values exist only at the
+leaf, per environment. This is exactly redline's `.properties` layering
+(`application` → `secret` → `<service>` → `<service>.secret`) generalised across
+projects instead of within one.
+
+### Machines in more than one segment
+
+Permitted, because the legitimate case already exists: a LAN CI runner
+(`runs-on: [self-hosted, lan]`) that publishes to the registry and deploys
+several projects crosses segments *as its job*. Same for a shared data layer or
+a backup host.
+
+**The danger is not the membership, it is forwarding.** A dual-homed machine
+with `ip_forward` on bridges two segments that were meant to be isolated — a
+bypass, not a smell. So:
+
+- Forwarding between a machine's own segment interfaces is **denied by
+  default**. Crossing is a declared exception with a reason.
+- **Keys are per-interface**, which WireGuard forces anyway — so a compromise
+  of `wg-code` does not hand over `wg-redline`. This also settles the
+  one-key-per-machine question `config-manager.md` left open, at least at the
+  network layer.
+- Blast radius is the **union** of a machine's segments. Make it checkable: hz
+  can list every multi-segment machine and what it bridges. "Bad design but
+  possible" becomes "possible, visible, and it has to be explained."
+
+Segment membership goes through the same typed-fingerprint approval as config.
+A bad `AllowedIPs` silently routes a segment's traffic somewhere; it deserves at
+least what a config change gets. That is the difference between an agent and a
+backdoor — the agent applies what a human approved for *this machine*.
+
+## Versions
+
+Two axes already, with different mechanics, and they do not collide:
+
+```
+ops daemon   apt, one per machine, slow-moving, root
+app          per-slot binaries, two live at once, fast-moving
+```
+
+apt cannot hold two versions of one path and rolling needs two. It never has to
+— they are different packages by different mechanisms.
+
+```
+desired version   declared per environment     prod runs 1.2.3
+observed version  reported per instance        this box has 1.2.1
+```
+
+They differ during a rollout, and that gap *is* the rollout. **hz declares and
+displays the drift. It does not close it.** Closing it is the project's
+mechanism — apt, `docker compose pull`, a tarball, whatever.
+
+**Two clocks, and conflating them is a bug.** Found while designing the UI
+against `example-projection.md`:
+
+```
+agent poll      fixed cadence, per MACHINE     → machine liveness
+observed_at     refreshes on config resolve,
+                which happens at boot,
+                per INSTANCE                   → age of the version reading
+```
+
+`config-manager.md` is explicit that nothing in the boot path may depend on
+freshness — services here run unattended for years — so an instance that is
+healthy and never restarts has a *deliberately* old `observed_at`. That is not
+staleness. Machine liveness comes from the agent's poll; a machine's "last
+reported" is derived from its instances and must be labelled as derived.
+
+**And a machine can have nothing to report, correctly.** A box with a segment
+and an agent but no instance — a CI runner, a bastion — will never report an
+observed version. Under a naive last-seen it is a permanent false alarm on a
+healthy machine. Fresh, late, never-reported and *nothing-to-report* are four
+states, not three.
+
+This is the same seam `configmgr` already draws one level down: *"configmgr does
+not know what a `.properties` file is — deliberately, and it is the boundary
+that keeps the library reusable."* hz does not know what a `.deb` is. A version
+string is opaque: a Debian version, an image tag, a git sha, an upstream release
+number. If hz mandated apt, most projects would not fit.
+
+**Promotion moves the same artifact, not a rebuild.** `git describe` yields one
+version per commit, registry versions are immutable, and the bytes staging ran
+are the bytes prod installs. A rebuild for prod makes staging theatre.
+
+**It closes the config contract.** `minVer`/`maxVer` already exist on a config.
+Paired with a declared version, resolution is determined from both sides — a
+binary cannot boot on config predating a key it requires. Without a declared
+version those ranges only describe whatever happened to be installed.
+
+### What hz genuinely imposes
+
+Never zero, so state it:
+
+1. **Versions are semver.** Stricter than "must sort", and already implemented
+   that way (`internal/db/configmgr.go:986`). Cost: a project that wants
+   `minVer`/`maxVer` ranges must present a `MAJOR.MINOR.PATCH[-PRERELEASE]`
+   tag. It may carry anything it likes as build metadata beside it.
+2. **An instance has an address.** Cost: you name your things.
+3. **Config is a flat sealed key/value map per environment.** Cost: no
+   hierarchy inside a config, no per-key ACL.
+
+None of them is a packaging strategy.
+
+## Where we are
+
+**Built and proven**
+
+- Services, domains, haproxy, DNS, dev domains.
+- Config manager — persistence, crypto, handlers, client library, CLI, UI
+  (v0.4.0). Ran end-to-end once on `redline-virgin` 2026-09-19: registered,
+  approved by typed fingerprint, key wrapped, config decrypted, absent
+  distinguished from empty. Recorded in [plan.md](../../plan/plan.md) item 9.
+  **redline's** copy of `plan/config-manager.md` still says "none of it has run
+  against a real box or a live hz" — stale there, correct here.
+- redline: `.deb` → Gitea registry → `apt-get install`, proven over a tunnel.
+- redline: profile axis, `EnforceProdPosture`, rolling contract verified per PR.
+
+**Built, not landed**
+
+- The projects slice — `Project{Name, Parent}`, `Service.Project`,
+  `Service.Environment`, `ValidateProjects()`, `hz project ls|show`. Branch
+  `wt/projects`, unmerged, unpushed.
+
+**Not true yet** — each with its evidence
+
+| claim | evidence |
+|---|---|
+| No prod machine | no `DEPLOY_HOSTS_prod` in redline's `deploy.properties`; `deploy/home/prod.properties` says "THIS FILE IS NOT LIVE YET" |
+| redline still ships plaintext secrets | `bin/deploy` rsyncs `deploy/home/*.secret.properties`; `configmgr` not imported |
+| No apt guard | `deploy/provision/` has no `sources.list.d` for the registry, no `apt-mark hold`, no unattended-upgrades scoping |
+| One VPN, shaped for people | `WGInterface`, `VPNRange`, `ServerEndpoint`, `AllowedIPs` all scalar in `internal/config/config.go`; peers are `InvitesFile` / `VPNAdmins` / `VPNMFADurations` / `internal/qr` |
+| No environment, posture or version record | `internal/config/config.go` |
+| Service has one backend | `internal/config/config.go` |
+| No agent | `provision.sh:150` downloads `hz-client` as a CLI run by the app user; `internal/autoheal` is local-only `exec.Command`, no ssh |
+| Nothing reports what a box resolved | `config-manager.md` §4, not built either side |
+| Environment keys have no backup | the design relocates the single point of failure; it has not removed it |
+
+**Already-existing reach**, for accuracy: `internal/monitor/remote.go` polls
+remote vantages over HTTP, read-only. hz does reach off-box today. What it has
+never done is *execute* on a box it is not.
+
+## The path
+
+**Phase 1 — make what exists true.** No new concepts; all of it is started.
+
+1. Merge `wt/projects`.
+2. Back up environment keys to the password manager. Before anything depends
+   on them. **The tooling landed 2026-09-20** (`hz config recovery`, see *Key
+   custody* below); what remains is running it on the real box —
+   `keygen` → `add` → `backfill` → **`verify`**. Not done until `verify` says
+   yes.
+3. redline imports `configmgr`. Deletes plaintext secrets from the dev box, the
+   shared `deploy/home/secret.properties`, and the `--confirm-secrets` guard.
+
+**Phase 2 — the environment record.** Four strings and a display.
+
+4. `Environment{project, name, posture, from, version}`.
+5. ✅ **Done 2026-09-20.** Persist the version each instance already reports.
+   `configmgr.Options` carried `Version`/`Build` and hz kept neither: the
+   register handler passed `Version` straight into `cm_registrations.version`,
+   which is frozen at first-seen on purpose, and the resolve handler used it
+   only for range containment and never read `Build` at all. 0011 adds
+   `observed_version` / `observed_build` / `observed_at` **to the registration,
+   not the machine** — an instance address is `(project, environment, app,
+   role)` and redline's two slots run different versions for the whole length
+   of a rolling deploy, so a per-machine column would report a half-done
+   rollout as done. Written on register and on every resolve; no new endpoint,
+   no heartbeat.
+6. Show desired vs observed. Drift becomes visible; nothing acts on it.
+   ◐ **The data half landed 2026-09-21** — machines report their plan back
+   (`GET/POST /api/v1/agent/observed`, `privilege-classification.md` §4.1) and
+   hz stores and serves it. That covers the MACHINE's half of the diff.
+   Instance version drift is 0011's columns, and the two must not be merged in
+   a display: an agent poll is a heartbeat on a fixed cadence, an instance's
+   `observed_at` refreshes at boot, and a healthy long-running instance has a
+   fresh agent and an old version reading (`example-projection.md` §3). The
+   SCREEN is still unbuilt; `ui.md` Part 2 designs it.
+
+**Phase 3 — climb the rung.** Mostly not software.
+
+7. A prod machine and its segment. The actual unknown.
+8. apt source + `apt-mark hold` + unattended-upgrades exclusion — one commit in
+   redline's `provision.sh`, landing *with* the source, not after.
+9. `hz env add prod --from staging` — invariants copied, env-bound keys blanked
+   until re-answered.
+
+**Phase 4 — the agent, on the gateway first.** The largest slice, and the one
+that changes hz's shape.
+
+10. ✅ **done except `autoheal`, which does not transfer.** Split render from
+    apply in `internal/haproxy`, `internal/dnsmasq`, `internal/iptables`,
+    `internal/wireguard`. Pure functions stay in hz; the privileged half
+    becomes the agent's. `internal/autoheal`'s `Run()` *is* apply — there is no
+    desired-state text to render, and its analogous seam is
+    `plan(observed) → []Action` / `execute`, a different refactor.
+    Each package carries a `seam_test.go` that rejects
+    `os`/`exec`/`net`/`time`/rand/`filepath` in the render file, so the split
+    does not quietly re-merge. **`internal/wireguard`'s guard is stricter and
+    had to be**: it walks the AST and checks *selectors*, because that renderer
+    genuinely needs `net.ParseCIDR` and `time.Unix` while `net.LookupHost` and
+    `time.Now` must stay out — an import-only rule would have to allow all of
+    `net` or reject the file. It also rejects anything that can *mint* a key,
+    not anything that handles one: `GenerateClientConfig` is handed a private
+    key, and a client config without one is not a config.
+    **`wireguard`'s state-of-record is deliberately only half-resolved.**
+    Parsing is pure and the manager holds the peer set, but the file is still
+    the record. Moving it into hz's own store is items 13–15, and mixing a
+    model change into the split would have made "no behaviour change"
+    unprovable — there would be no old behaviour left to compare against. The
+    line-patch renderers are unexported on purpose: they encode the old model
+    and should be deleted rather than ported. `internal/dnsmasq` adds a second axis the others
+    do not need: installing a systemd unit is a *different* privilege from
+    writing a config file, so `unit.go` is separate from `apply.go` and a guard
+    keeps `os/exec` out of the latter. The agent should be able to grant one
+    without the other. `internal/autoheal` is expected not to transfer — see
+    `plan/icebox.md`, "Where the seam pattern transfers".
+11. ✅ **done, and it is INERT.** `cmd/hz-agent` + `internal/agent` +
+    `GET /api/v1/agent/desired`. Done on the gateway alone, before any remote
+    machine exists — it is the same code path, it is the box you can walk to,
+    and a break is recoverable.
+
+    **Installing it today changes nothing, and three independent things
+    enforce that**: `install` writes the unit and neither enables nor starts
+    it; the unit has no `[Install]` section, so `systemctl enable` refuses;
+    and its `ExecStart` carries no `--apply`, so even a hand-started agent
+    computes a diff and logs it. `run --apply` is the only writing path and it
+    also demands root. Four tests pin each of those.
+
+    **Transport: a conditional GET, polled.** The ETag *is* the payload's
+    content hash (`Desired.Fingerprint`) — no generation counter to keep
+    correct across restarts, a rollback returns to the generation it came
+    from, and an in-sync fleet costs a 304. Rejected: a local unix socket (it
+    makes the gateway the special case this document refuses, and leaves the
+    remote path exercised only by machines you cannot walk to); long-poll (a
+    held connection per machine through haproxy, to save seconds on a change
+    a human is watching); and `hz sync --wait` blocking on an applied-generation
+    report — right eventually, wrong while the agent ships inert, since hz
+    would wait on something deliberately not running. **The report-back landed
+    2026-09-21 and does not revisit that**: hz stores what a machine says and
+    nothing blocks on it, so a box that never reports costs a screen saying
+    "silent", not a stalled `hz sync`. **Cost: a service change
+    is applied within one poll interval (5s default, 2.5s mean) instead of
+    synchronously inside the hz request.** That is the whole behavioural price
+    of item 12.
+
+    **What crosses the wire is rendered output, not a `MachineConfig`** — the
+    projection is item 14. The consumer side does not change shape when it
+    lands; only the producer does.
+
+    Wired: haproxy (config + jail ACL + reload), dnsmasq (conf + records +
+    unit restart), iptables (`Reconcile` over hz's own expected/stale sets).
+    WireGuard joined them on 2026-09-21 (item 12 step 2): `wg0.conf` crosses as
+    a forced-`Secret` file now that the admin path is off the route, so the only
+    reader is the machine whose key it is. Not transferred:
+    letsencrypt's cert writes (split, not served) and `autoheal` (does not
+    transfer, see item 10).
+12. hz web drops to an unprivileged user. `main.go`'s four `Geteuid` gates and
+    the `User=root` unit at `internal/config/config.go:2477` go away.
+
+    **The handover from item 11, in the order it has to happen.** Ownership
+    flips atomically or the gateway has two processes reconciling one haproxy:
+
+    1. ✅ **Done 2026-09-21.** Give the agent a credential of its own. It did
+       not merely hold too much authority — it held *none that worked*:
+       `isAdmin` has no Bearer path, so the poll answered 401 on a real box
+       (`docs/design/privilege-audit.md` §1.1). Fixed with a per-machine secret
+       (`hz-agent enroll` → `/etc/hz-agent/token`, 0600) whose SHA-256 hash hz
+       keeps in `<config>.agents`, checked by `Server.agentCaller` on one
+       route. `isAdmin` was deliberately NOT widened: a Bearer branch there
+       would make the shared admin token an API key for every admin surface.
+       Item 13 changed the ISSUER of that credential (done 2026-09-21) and
+       nothing else: hz mints it, for a machine it declares. `isAdmin` still
+       has no Bearer branch for the shared token — the enrolment client
+       exchanges it for a session the way `hz` itself does.
+    2. ✅ **Done 2026-09-21.** The WireGuard section is served, and the admin
+       path came off `handleAgentDesired` in the same commit — one decision,
+       not two. `|| s.isAdmin(r)` is gone; the only way in is a machine's own
+       agent credential, so the private key that now crosses goes to the
+       machine it belongs to and nowhere else.
+
+       **What the section carries is wg0.conf read back**, not a render. hz has
+       no whole-file renderer for it because it does not write one: it mutates
+       the file in place (`AddPeer`, `RemovePeer`, `UpdateInterfaceRules`), and
+       `internal/wireguard`'s package doc says the file on disk is still the
+       state of record. So serving the state of record makes the same claim
+       every other section makes — *this is what hz would write*. Item 14's
+       projection replaces the producer; the wire shape does not change. What
+       it buys meanwhile: the file crosses under the forced `Secret` flag, the
+       agent's WireGuard plan/diff/apply path stops being dead code, and a peer
+       change moves the payload fingerprint. Unreadable or absent ⇒ **no
+       section** — which is also the honest answer once hz web is unprivileged.
+
+       `TestNoKeyMaterialCrossesThisEndpoint` was **replaced, not deleted**. Its
+       claim (no key material crosses at all) is false by design now. The four
+       tests that stand where it stood pin what is still true: `Secret` is
+       FORCED by `Desired.files()` and not trusted from the wire; `diff.go`'s
+       pattern redaction catches a key with the flag out of the way (proven on
+       a section that gets no forcing, so the two layers are independent); no
+       key reaches a refusal body, an error or a report; and only a credential
+       for THIS machine is answered. Verified on `hz-audit` with a throwaway
+       wg0.conf: admin session 401 (200 before), agent 200, section present,
+       nothing printed.
+    3. ✅ **Done 2026-09-21.** Split first, then wired. What the agent could
+       not reach — letsencrypt's cert writes, `/etc/haproxy/certs`, and
+       HAProxy's `errors/503.http` — now crosses.
+
+       **The wiring, and the one new concept it needed.** `errors/503.http`,
+       the per-service `<svc>_503.http` maintenance pages and the served
+       certificate bundles are all in the payload. The pages needed something
+       `agent.File` could not say — *delete what is not listed* — which is
+       `agent.Directory`: hz declares "this directory is mine and the names in
+       it matching this claim are exactly what I listed", and the agent removes
+       the rest. **Declarative, not a delete list**: hz does not know what is on
+       the box, so a list of paths to delete would have to come back from a
+       report round trip and the payload would stop being a projection.
+
+       **What bounds the prune** (`internal/agent/ownership.go`, one function
+       both the planner and the applier ask independently): only two sections
+       can carry a claim at all, so a claim on the cert or WireGuard section is
+       unrepresentable rather than unimplemented; a claim is one directory deep
+       and a pattern with a separator claims nothing; an **empty `Match` claims
+       nothing** — fail-closed, because `/etc/haproxy/errors` holds the
+       distribution's own 400/403/…/504 pages beside hz's two names; a file the
+       payload lists is never a candidate; and the applier re-asks the bound
+       immediately before each unlink rather than trusting the plan's `Kind`
+       (a `Change` is a plain struct, and a plan crosses a wire in the other
+       direction). `TestRemovalIsImpossibleOutsideAClaimedDirectory` fails if
+       either the bound or the re-check is widened — verified by doing both.
+
+       **One generic section, not a named one per subsystem** (§4.3's question,
+       answered): `Desired.Files` is `{Files, Dirs, Units}`. The line is APPLY
+       SEMANTICS — haproxy, dnsmasq, wireguard and iptables each need a
+       specific thing done after a write, so they stay named; a journald
+       drop-in or a sysctl file is "write bytes, maybe poke a unit", and those
+       go here. `Unit{Name, Action}` is what keeps `Subsystem` meaningful for a
+       bag of files. It has no producer yet — the maintenance pages went to the
+       HAProxy section because they need HAProxy's reload, and that is the test
+       for which section anything belongs in.
+
+       **The cert section** is `<SSLHAProxyCertDir>/<domain>.pem` and nothing
+       else, `Secret` forced by `Desired.allFiles` like WireGuard's, folded
+       into HAProxy's reload rather than given an apply half of its own. It
+       carries no directory claim on purpose: `pullCertFromPeer` also writes
+       there (`ha-and-the-agent.md` §4), and claiming it would have the agent
+       delete what that just put down. **diff.go's layer 2 had to grow for it**
+       — a PEM has no `key = value` line, so pattern redaction would have had
+       nothing to say about a bundle; it now blanks PEM key banners and bare
+       base64 lines, which is what makes the two layers independently provable
+       for a certificate as they already were for a WireGuard config.
+
+       Verified on `hz-audit` against the live gateway files: `503.http`
+       *unchanged* (same bytes by construction), a maintenance page *create*, a
+       planted stale `ghost_503.http` *remove*, the distribution's six pages not
+       mentioned at all, and a changed bundle reported as "contents differ
+       (238 bytes on disk, 238 desired) — not shown, this file carries key
+       material". Nothing was applied; the agent is still inert.
+
+       **`internal/letsencrypt` and `internal/acme` are now render/apply split**
+       like the other four, each with a `seam_test.go` guard. These two guards
+       are stricter than the rest and had to be: the pure halves must also be
+       unable to reach a CA, unable to touch the ACME account key, and — in
+       `acme` — unable to name a provider credential, because
+       `ProviderSummary` is the function that decides what a log line says
+       about a provider that has an AWS secret key in the same struct. Verified
+       byte-for-byte against the pre-refactor packages: 6912 rendered configs,
+       1400 letsencrypt observations, 13 ACME logs, zero diffs.
+
+       **`loadTLSAssets` no longer reads during render.** The cert facts are an
+       input: `haproxy.CertStore` is a `func(certDir string) []Cert` on the
+       manager, defaulting to `ScanCertDir` (apply.go, the privileged read).
+       The pure half is `TLSWanted` + `TLSAssetsFor`. So hz web keeps rendering
+       HTTPS configs after it loses the right to open `/etc/haproxy/certs` — it
+       replaces one function. Without that, an unreadable cert directory and an
+       empty one are the same answer, and every HTTPS gateway would have
+       silently re-rendered as plain HTTP.
+
+       **`errors/503.http` belongs to the agent**, and it rides in the HAProxy
+       section rather than anywhere else. It is a rendered artifact
+       (`haproxy.RenderError503`, a constant with no secret and no
+       machine-specific value), its *only* writer anywhere in hz is
+       `WriteConfig`, and the config that references it — `errorfile 503 …`,
+       always emitted — already crosses the wire in that section. HAProxy
+       refuses to start on a missing errorfile, so page and config land under
+       ONE reload: same section, so `Apply` writes every file in it and then
+       reloads once. `TestTheErrorPageExistsBeforeHAProxyIsReloaded` asserts
+       the guarantee from inside the reload rather than asserting the
+       arrangement. **The second writer in that directory,**
+       `Config.WriteMaintenancePageFiles`, is the one that needed
+       `agent.Directory`; it keeps writing until item 12 step 5, and both it
+       and the payload now render from one function (`Config.MaintenancePages`).
+
+       **Certificate material may cross to the agent** — reasoned out rather
+       than assumed from the WireGuard precedent; see "Cert material and the
+       two channels" below.
+    4. Add an `[Install]` section to the agent's unit, drop `--apply` from the
+       "never emit this" rule in `generateUnit`, and put it in `ExecStart`.
+
+       **Its precondition is already done** (2026-09-21, ahead of this step
+       rather than inside it): hz-agent and HA peer-sync are now mutually
+       exclusive on one machine, and hz REFUSES TO SERVE DESIRED STATE to a
+       machine in a fleet — `internal/server/agent_fleet_guard.go`, decided in
+       `docs/design/ha-and-the-agent.md` §6 option B and §7. Refusing at hz needs no
+       cooperation from the agent, so it is already correct for the agent this
+       step arms. Checked at boot, in `applyNewConfig` before the config swap
+       (fleet topology is per-instance and never comes off the wire), and on
+       every poll; the reverse — configuring a fleet while an agent reports
+       `applying: true` — is a 409 at the join flow's first step. So this step
+       is now a change that cannot introduce that hazard, rather than one that
+       introduces and fixes it in the same commit.
+       Four tests in `cmd/hz-agent` assert today's inertness and are the
+       checklist: `TestInstalledUnitDoesNotApply`, `TestUnitIsNotEnableable`,
+       `TestInstallRefusesToRenderAnApplyingUnit`, `TestReportOnlyPassWritesNothing`.
+    5. Only then stop hz applying: `syncServices` renders and stops, hz's unit
+       drops to `User=hz`, and the four `Geteuid` gates go.
+
+    **Verify before flipping**, which is what the diff is for: `sudo hz-agent
+    diff` on the live gateway must report *in sync* for every section. A clean
+    report is evidence the agent would write exactly what hz already wrote.
+    Run it as root — unprivileged it cannot read `wg0.conf` or the live
+    firewall and says so per target rather than guessing.
+13. ✅ **Done 2026-09-21.** Machine record — identity and segments
+    (`internal/config/machine.go`: `Name`, `Segments`, `Note`), validated on
+    `Save` beside the other four validators, with `hz machine add|ls|show|rm`.
+    NO project and NO environment, NO observed version, NO placement — each
+    absence is the model and each is pinned by a test rather than by a comment.
+    Multi-segment is legal, flagged on every row, and **enumerable**
+    (`MultiSegmentMachines`, `hz machine ls --multi-homed`), because blast
+    radius being the union of a machine's segments is only a useful sentence if
+    the segments can be listed. A machine in more than one segment is REFUSED
+    without a `Note`: architecture's own rule is that a crossing is a declared
+    exception *with a reason*, and a reason nobody is obliged to give is a
+    reason nobody gives.
+
+    **Issuance moved to hz, and only issuance.** `hz-agent enroll` asks
+    (`internal/agent/enrolment.go` → `POST /api/v1/agent/enroll`) instead of
+    minting locally and writing hz's store; hz refuses a machine it does not
+    declare, mints, records the HASH and answers with the secret once. The
+    store format, the header, the hashing, `Server.agentCaller`, `HTTPSource`
+    and the poll are untouched, because none of them know where a credential
+    came from. The ask is admin-authorised at the box, used for one request,
+    never stored there and never in the unit; `isAdmin` still has no Bearer
+    branch for the shared token. Re-enrolment sends the hash of what the box
+    holds, never the secret, so `install` stays idempotent.
+
+    **`handleAgentDesired`'s 404 became a projection answer.** It no longer
+    says "not this box" — an identity claim, which was all hz could make when
+    it knew only its hostname. It now says hz has no desired state for that
+    machine, and says whether the machine is declared (waiting on item 14) or
+    not (waiting on a declaration). Still a 404, still total.
+
+    Segment NAMES resolve against nothing yet — that is item 15.
+    NOT the observed version: that
+    settled onto the registration in 0011, because it belongs to an instance
+    and several instances share a box.
+14. ✅ **Done 2026-09-22.** `project(global, machineID) → MachineConfig`, pure,
+    tested offline against `example-projection.md` §3's estate
+    (`internal/projection`, `seam_test.go` guarding purity by imports AND by
+    selector, so `config.Load` and `os.Hostname` are unwritable in there).
+    `Global` is `{Config, Instances, AgentVersion, Serial}` — the registrations
+    arrive as an ARGUMENT because a pure function may not open a database, the
+    same discipline `haproxy.CertStore` already follows.
+
+    **The gateway is machine #1, literally.** There is no branch on the local
+    box inside the projection. What the gateway *also* has is sections hz
+    produces by reading local files, and those are COMPOSED onto the projection
+    at the call site (`server.desiredFor`), never special-cased inside it. The
+    predicate at that seam is "can hz open this machine's filesystem", which is
+    a fact about hz's reach, not about the gateway being privileged.
+
+    **Sections became conditional, and the hard part was honesty.**
+    `buildAgentDesired` emitted haproxy, dnsmasq and iptables unconditionally
+    because it had only ever run for the gateway. They are now attached only
+    for the local machine — and a bare nil would have been a lie, because nil
+    already means "hz does not manage this here", which an agent acts on. So a
+    remote machine's projection carries an **`Unresolved` gap per absent
+    section**, saying which of the two reasons applies: hz READS the file and
+    cannot read another machine's (WireGuard's `wg0.conf`, the served cert
+    bundles) or hz has NO MODEL for it at all (haproxy/dnsmasq/iptables are
+    this process's own subsystem settings; nothing declares which machines run
+    an edge). Empty-because-unwanted and empty-because-unknown are now
+    different states in the payload, which is what the drift screen already
+    assumed.
+
+    **`handleAgentDesired` serves any declared machine.** The 404 branch for a
+    declared machine is gone; an undeclared one still gets the same total 404.
+    The local box is served declared or not — requiring a declaration would
+    404 a live gateway's agent the day this shipped.
+
+    **The join is the one `example-projection.md` §5 shows the output of.** It
+    needed a coordinate the registration record did not have: an address was
+    `(environment, app, role)` and an environment name is unique PER PROJECT,
+    so `prod/web/app` was ambiguous on its face — §1 has six projects declaring
+    a "prod". hz used to resolve it BACKWARDS, from the app coordinate:
+    `Service` carries `Project`, so `web` resolved to storefront and the rung
+    was looked up inside it, with a globally-unique environment name as the
+    fallback and a gap naming `hz service assign` when both roads closed.
+
+    **That derivation is deleted as of 2026-09-22.** The address is now
+    `(project, environment, app, role)` — migration `0013`, and
+    `configmgr.Addr`/`EnvKeyAddr` carry the project as the FIRST field of the
+    authenticated additional data. `resolveEnvironment` is one line,
+    `cfg.LookupEnvironment(inst.Project, inst.Environment)`; the service→project
+    map, the globally-unique fallback, the ambiguity branch and the exported
+    `ResolveEnvironment` are gone, and the version-drift join calls
+    `cfg.LookupEnvironment` directly because there is no longer a guess for two
+    callers to disagree about. The instances gap survives with a narrower
+    meaning — an instance naming a rung hz does not declare — and no longer
+    names `hz service assign`, which keeps existing for every other reason it
+    did. Why it was worth a flag day rather than a convention: an environment
+    key can be installed at several addresses (`hz config key import`), and once
+    it is, the AAD is the only thing between two projects' rungs of the same
+    name — a three-field AAD does not name the project, and the cross-project
+    read was demonstrated. `configmgr.TestCrossProjectReadIsRefused` is the
+    standing proof it is now refused. Only APPROVED registrations count — a
+    pending one is an address a box asked for and nobody granted.
+
+    **Two things `example-projection.md` expressed that the code could not.**
+    Both are closed as of 2026-09-22, after the audit moved the spec:
+
+    (a) **The unit name**, which used to be `<project>@<role>.service` and
+    dropped the app coordinate — §3's own gateway hosts `intern/prod/git/app`
+    AND `intern/prod/idp/app`, two apps of one project at one role, which
+    collided. §5 now settles it as
+    `<project>@systemd-escape(<environment>/<app>/<role>).service`: the project
+    is the prefix because the project IS the package name that ships the
+    template unit, and all three of environment/app/role are in the instance
+    part because dropping any one collides on this estate. It cannot collide —
+    a registration is unique on `(machine, project, environment, app, role)`
+    (0013) and the escape is reversible, so the name is a key. `systemd-escape`
+    is implemented in-package rather than shelled out, because the projection is
+    pure. The `units` gap stayed: it now catches a CALLER that hands the same
+    address twice, which nothing inside a pure function can rule out.
+
+    **THE PROJECT COORDINATE DID NOT CHANGE THIS SCHEME, and must not.**
+    `Instance` now carries a project and `Instance.Address()` renders it, but
+    the instance part of a unit name is still the THREE-part
+    `environment/app/role` — the project is already the prefix, and taking it
+    from `Address()` would put it in twice and rename every unit on every box as
+    a side effect. `unitName` builds the three fields explicitly and
+    `projection_test.go` pins the rendered names byte for byte. Anyone
+    "tidying" `unitName` to use `Address()` is breaking this.
+
+    (b) **`serial`** has no producer and `MachineConfig.Serial` is always 0.
+    §5 no longer asks for a serial pair at all — item 11 chose a content hash
+    deliberately and `Desired.Fingerprint` is the generation every consumer
+    compares. The field is kept, carried in as an input, and its comment now
+    describes the monotonic FLOOR above rather than pointing at a spec that
+    stopped asking: a floor answers "is this older than what I already ran",
+    which is a different question from "is this current" and one nothing has
+    asked for yet.
+
+    **The drift screen's `generationMatch` stops being `unknown` fleet-wide.**
+    `observedFleet` computed desired state once, outside the loop, for hz's own
+    box; it now computes per machine, so a declared remote machine reads
+    `match` or `behind` — two outcomes that were both `unknown`. A machine no
+    record declares stays `unknown`, which is now a statement about that
+    machine rather than about hz's reach.
+
+    NOT done here and deliberately: no `Segment` record (item 15), no remote
+    apply, no commit-confirmed (item 16). `Desired.Model` has no apply half —
+    `plan.go` does not walk it — so the four inertness tests pass unchanged.
+15. `VPNRange` / `WGInterface` / `AllowedIPs` go plural. **Item 13 left names
+    waiting on this**: `Machine.Segments` holds segment names that nothing
+    resolves, because there is no Segment record to resolve them against. Item
+    15 has to add one — a name, a CIDR (today's single `VPNRange`), an
+    interface (today's single `WGInterface`) and its peer/`AllowedIPs` set —
+    then extend `ValidateMachines` from checking a segment name's SHAPE to
+    checking its EXISTENCE, and give a machine a per-segment address and key.
+
+    **DONE 2026-09-23, except the key.** `config.Segment{Name, Project, CIDR,
+    Interface, Members}` landed with `hz segment ls|show|add|rm`,
+    `ValidateMachines` now checks existence (conditionally, so a config
+    declaring no segments is not retroactively invalid), and the projection
+    resolves a membership to its interface, address and derived peer set.
+
+    **A membership is no longer a declaration about a label — but it is still
+    not a tunnel.** Nothing populates `SegmentMember.PublicKey`: a box mints
+    its key at enrolment and `hz-agent enroll` does not send one. So hz can
+    name a peer and its address and **cannot emit a `[Peer]` block for it**,
+    and a `segments` gap says exactly that beside every resolved membership.
+    Rendering the WireGuard section, below, waits on that one field.
+
+    **Item 14 now names, precisely, what item 15 must add for the WireGuard
+    section to be RENDERED rather than read.** hz's WireGuard section is
+    `wg0.conf` read back because hz has no whole-file renderer for it — it
+    mutates the file in place and `internal/wireguard` says the file on disk is
+    the state of record. A remote machine's file is not hz's to read, so the
+    section is omitted with a gap. To render one instead, hz needs, per
+    `(machine, segment)`:
+
+    - the segment's **CIDR** (today's single `VPNRange`) and **interface name**
+      (today's single `WGInterface`), so a machine in two segments has two
+      interfaces rather than one that collides;
+    - this machine's **address on that segment** and its **per-interface
+      key**, which WireGuard forces anyway and which is what keeps a compromise
+      of one segment's key from handing over another's;
+    - the **peer set and each peer's `AllowedIPs`**, which is what the hub
+      needs to emit `[Peer]` blocks at all;
+    - the segment's **hub endpoint**, which is also what fills
+      `MachineConfig.Hosts` — §5's one `/etc/hosts` entry is the gateway's
+      address ON that segment, and that is the same missing record.
+
+    With those, `Segment.Resolved` becomes true, `Hosts` becomes computable,
+    and the WireGuard section becomes a render like the other four. Without
+    them a projection can name a membership and nothing else, which is exactly
+    what it does today and says so.
+
+    **Forwards do NOT wait on this.** A multi-homed machine's projection
+    already answers `forwards: []` — deny between its own interfaces — which is
+    this document's own default. A declared crossing needs a place to be
+    declared, and a `Note` is prose; that is a smaller addition than the
+    Segment record and it is not what blocks WireGuard.
+16. Remote agents: poll, diff, apply, commit-confirmed on network changes.
+
+Order matters here. Items 10–12 are a privilege refactor on one box with no
+new concepts; 13–16 add the model. Doing them the other way round means
+debugging a new distributed system and a privilege migration at once, in the
+box the whole network depends on.
+
+**Phase 5 — only once a second box fronts one service.**
+
+17. Service backend *set* instead of scalar-plus-promote.
+18. Resolution reports — the audit trail a future promotion gates on.
+
+## Decided
+
+### Key custody — a recovery recipient (2026-09-20)
+
+`configmgr/keystore.go:24` states the problem in its own comment: *"hz never
+holds an environment key, so this tree is the only place one lives."* The tree
+is `~/.hz` on the dev box. So importing `configmgr` and deleting
+`home/*.secret.properties` would not move the single point of failure — it
+would rename it.
+
+**A recovery key is a recipient that is always approved.** No new crypto:
+envelopes already carry a recipient (`handlers_configmgr.go:681`) and
+`ApproveRegistration(id, wrappedEnvKey, wrapKeyID, approvedBy)` already stores
+one wrap per machine.
+
+```
+create environment
+  ├─ env key generated in ~/.hz              as today
+  ├─ wrapped to machine pubkey on approval   as today
+  └─ wrapped to RECOVERY pubkey              new, automatic
+
+restore: recovery privkey → unwrap any environment key
+```
+
+- The recovery **private** key lives in the password manager. It never touches
+  the dev box or the gateway.
+- The recovery **public** key sits in hz config; the wrap rides hz's backups
+  like any other blob. **Which store that is turned out to be load-bearing and
+  this note did not say it:** `handlers_backup.go`'s export zip carries
+  `config.json`, the admin token, `wireguard.conf`, invites and certs — it does
+  **NOT** carry `hz.db`. So a wrap stored beside the machine grants
+  (`cm_registrations.wrapped_env_key`) would ride *nothing*, and the feature
+  whose whole purpose is surviving the loss of one disk would depend on that
+  disk. Both the recipients and the wraps therefore live in `config.json`
+  (`internal/config/recovery.go`), where they are also fleet-shared by
+  `mergeRemoteIntoLocal`.
+- It cannot drift, which is the whole reason to prefer it over a manual export:
+  a new environment is covered without anyone remembering a step.
+- Environment keys still rotate freely — they re-wrap to the same recovery
+  public key.
+
+**Ordering is load-bearing: custody before deletion.** Phase 1 item 2 gates
+item 3.
+
+✅ **Shipped 2026-09-20** as `hz config recovery` — `keygen` / `add` / `rm` / `ls` /
+`backfill` / `verify`, with `hz config key new` wrapping to every recipient
+automatically and failing loudly if it cannot. Two things the design above did
+not settle, decided in the build:
+
+- **`verify` is the point of the feature, not a convenience.** A stored wrap is
+  a claim; only the private half proves it. It checks three things — the blob is
+  addressed to this key, this key decrypts it (AEAD, with the address as AAD so
+  another environment's blob cannot pass), and the key inside hashes to the id
+  it is filed under. It deliberately proves nothing about which key hz calls
+  current, and nothing about any sealed config *value*.
+- **Retro-wrap reach is the local keystore, and only that.** hz cannot supply an
+  environment key and a stored wrap opens only with a recovery private key, so
+  `backfill` can reach exactly the keys in this machine's `~/.hz`. Gaps on keys
+  held elsewhere are reported by `ls`, never guessed at.
+
+So item 2 is now a command rather than a hand-export: `hz config recovery backfill`
+then `verify`. Item 3 stays gated on `verify` having actually been run.
+
+### Succession — a second recovery recipient (2026-09-20)
+
+Every environment key wraps to **a list** of recovery public keys, not one:
+the operator's, and a named successor's. Modelling it as a list rather than
+`primary + successor` means adding a third later is config, not a schema
+change.
+
+Decided now rather than later because **the recipient list is fixed when a key
+is wrapped.** Adding a recipient afterwards means unwrapping and re-wrapping
+every environment key — possible, but it needs a recovery key in hand and a
+pass over everything. Before the first environment is created under this
+scheme, it costs one more public key in a loop.
+
+Scope is deliberately narrow: the successor can open environment keys and
+nothing else. They are not in the password manager.
+
+**Removal is not really removal.** A wrap already written stays readable by
+whoever holds that key. Dropping a recipient from the list stops *future*
+wraps; undoing a past one means rotating the environment key. Say so when the
+UI offers a remove button.
+
+Why it is worth the step at all: redline moves real donations for real
+organisations. If the operator is unavailable, someone has to be able to keep
+it running or wind it down without the secrets being unrecoverable.
+
+Together these two close the risk [plan.md](../../plan/plan.md) names as *"the key has no
+escrow and no recovery path, which is the failure most likely to actually
+happen."*
+
+### Agent identity — a separate `hz-agent` package (2026-09-20)
+
+Three components, separated by privilege:
+
+```
+configmgr    library, in-process, app user   app config
+hz-client    library, in-process, app user   service ops   (plan.md item 10)
+hz-agent     daemon,  root                   machine config
+```
+
+`hz-client` is already moving toward an in-process library — item 10's driver
+is precisely that `curl` + `chmod +x` + `fork/exec` is the wrong shape. A
+library cannot be the agent: the agent is a privileged daemon that must run
+before the app starts.
+
+**The deciding constraint is the install path — but it is the *update* path
+that matters, not the bootstrap.**
+
+```
+bootstrap   hz-web may serve the binary. One fetch, by a human, with sudo.
+update      apt only, pinned and held. The agent never updates itself from hz.
+```
+
+Enrolment-time trust is not ongoing trust. At the moment you enrol a box you
+are already handing hz total authority over it — any segment, any config
+address, any desired version. Serving the binary as well is not a meaningfully
+larger capability *at that instant*, with a human present. What must not happen
+is hz pushing a new root binary to machines that are already enrolled and
+unattended, and that property survives a one-time fetch.
+
+The practical argument points the same way: `provision.sh:150` already fetches
+`hz-client` from `$HZ_URL` exactly like this, and requiring apt first is a
+chicken-and-egg — the apt source, its key and its pin are themselves machine
+config, so you would hand-configure the registry before installing the thing
+that manages machine config.
+
+So: **the agent's install verb configures the apt source and the hold as one of
+its first acts**, and the fetch path is used exactly once per machine.
+
+Box #1 is the exception in the other direction: there is no hz to fetch from
+yet, so the gateway's agent comes from the package or a release artifact.
+
+### `hz-agent` de-roots the hz web surface (2026-09-20)
+
+**`hz-agent` is to hz what `redline-ops` is to redline.** It does not exist
+only for remote machines — it runs on the gateway too, and root moves out of
+the web process into it. hz web drops to an unprivileged user and asks the
+agent for privileged work, exactly as `redline` asks `redline-ops`.
+
+Today (`internal/config/config.go:2477`) the unit hz writes for itself says
+`User=root`, and `cmd/homelab-horizon/main.go` gates on `os.Geteuid() != 0` in
+four places.
+
+**Why this is the highest-value change in the document.** hz's web surface is
+the most exposed thing on the network: reachable through haproxy, an OIDC
+login, an admin UI, an API, a database. It is also the WireGuard server, the
+DNS server and the TLS terminator for everything. Today one web vulnerability
+is root on that box, which is the whole network. After this it is a web app
+that can *ask* for things, and the asking goes through the same approval every
+other machine's does.
+
+**What moves is the apply half, not the render half:**
+
+```
+hz web (unprivileged)    render(global) → desired files/rules        pure
+hz-agent (root)          write, reload, install, bring interfaces up  privileged
+```
+
+So `internal/haproxy`, `internal/dnsmasq`, `internal/iptables`,
+`internal/wireguard`, `internal/autoheal` and letsencrypt's cert writes split
+along a seam most of them already have.
+
+**The uniformity win is the real prize.** The gateway stops being a special
+case: `project(global, machineID)` for the gateway is the same function as for
+any other box, and the gateway's agent polls `localhost` like any other agent
+polls hz. No unix socket, no new IPC, no privileged side-channel — one
+mechanism, exercised locally every day, which is the best possible test of the
+remote path.
+
+There is precedent in-tree: `internal/server/static_supervisor.go` /
+`static_child.go` already run a root supervisor with a dropped child. This
+inverts it, which is the stronger direction — the exposed half is the
+unprivileged one.
+
+**Bootstrapping: `sudo hz-agent install`.** hz never installs the agent — a
+human does, once. The dependency then runs the other way:
+
+```
+human (sudo) → hz-agent install → hz-agent.service   User=root
+                                → hz.service         User=hz
+```
+
+This is already the house pattern, twice: `cmd/hz-probe/install.go:193` and
+`cmd/homelab-horizon/main.go:68` are both `sudo <binary> install` behind a
+`Geteuid` check. `hz-agent install` is the third instance, not a new idea.
+
+**hz-agent owns hz's unit file**, which closes the loop: upgrading, restarting
+and configuring hz all become `Units []Unit` in `MachineConfig`. hz is just
+another app the agent manages, on machine #1.
+
+**Bootstrap places units; the agent owns them thereafter.** These are not in
+conflict, and the distinction is the same one the fetch rule turns on: a
+one-time action with a human present, versus continuous unattended ownership.
+
+```
+box #1   sudo homelab-horizon install --agent    places BOTH, from one artifact
+box #N   sudo hz-agent install --hz https://...  places the agent, enrols
+after    the agent owns every unit on the box, hz's included
+```
+
+`homelab-horizon install --agent` is the right shape for box #1 because the
+artifact you downloaded *is* the server — you fetched it because you want a
+gateway. An agent-first bootstrap would have to go and find the server binary
+from somewhere, and on box #1 there is nowhere to find it.
+
+**The distribution mechanism already exists, and `hz-agent` is one more entry
+in it.** `internal/server/hzbin` embeds cross-compiled binaries named
+`<tool>-<os>-<arch>`, populated by the Makefile's `hz-embed` target before a
+tagged build, served by `internal/server/handlers_hz_install.go`. `ToolHZ` and
+`ToolProbe` are defined; `ToolAgent` is a third constant. The arch matrix, the
+availability listing and the "not embedded in this build" path
+(`hzbin/embed_off.go`, build tag `hzembed`) come with it.
+
+So the server *carries* the agent rather than fetching it:
+
+- **box #1** — `install --agent` extracts the embedded binary. No network.
+- **box #N** — fetches it from the install handler that already serves `hz`
+  and `hz-probe`. Nothing new to build.
+- **no-apt boxes** — the same fetch, run by a human. Always available, because
+  hz-web is always there.
+
+It also ties the agent's version to the server's by construction, so
+agent/server compatibility is not a matrix anybody has to reason about. A box
+still holds at whatever version its `MachineConfig` names.
+
+**Box #1 has no package manager to install from, and that is not an edge
+case — it is the normal gateway install.** The Debian registry *is* Gitea,
+which runs on the gateway. At gateway-bootstrap time there is definitionally no
+registry, so the gateway always starts from a downloaded artifact and only
+points at its own registry afterwards.
+
+**Machines with no apt at all** (Alpine, RHEL, a Mac) resolve the same way the
+version axis does: the agent updates through **the machine's own package
+manager** where one exists, and where none does, an update is **a human
+re-running the install verb**. The invariant holds in both cases and is the
+only one that matters:
+
+> hz never replaces the agent binary on an enrolled, unattended machine.
+
+So `homelab-horizon install` is **not** deleted after all — it is narrowed to a
+bootstrap verb and gains `--agent`. Its legacy alias (`root.go:163` maps
+`-install` → `install`) stays valid. What goes away is the *daemon* running as
+root, not the install path.
+
+Naming, since there is no `hz-web` binary: the server is `cmd/homelab-horizon`,
+`hz` is the CLI, `hz-probe` is the vantage. The new package is `hz-agent`; the
+existing server keeps its name and loses its privileges.
+
+**The migration is smaller than it looks.** `StateDirectory=homelab-horizon`
+makes systemd chown the state directory to whatever `User=` says, so flipping
+`User=root` → `User=hz` migrates `/var/lib/homelab-horizon` (0750, db 0600) on
+its own. What is left:
+
+- `/etc/homelab-horizon/config.json` — one chown.
+- `/etc/letsencrypt` and `/etc/haproxy/certs` — these move to the agent, which
+  is the refactor, not the migration.
+
+**Watch `ExecStartPre=+`.** The unit already uses systemd's `+` prefix to run
+its `mkdir` as root regardless of `User=`. A legitimate escape hatch, and also
+exactly the shortcut that would quietly keep root operations inside hz's unit
+and undo the whole change. Every `+` in hz's unit after this should have to
+justify itself.
+
+**One residual.** The gateway's agent polls hz for its own `MachineConfig`, so
+a broken hz means the agent cannot fetch the config that would fix hz. The
+cached-boot rule covers it the same way it covers every other box, and
+`sudo hz-agent install` stays the local escape hatch — which is another reason
+the verb should exist rather than the package postinst doing everything.
+
+**Consequences elsewhere in this document:**
+
+- Goal property 7 strengthens: hz holds no root **anywhere, including its own
+  box**, not merely no inbound credential for remote ones.
+- "hz is root on the box it is, and reconciles what it owns there" — the
+  statement this design started from — stops being true, by choice.
+- The availability risk is unchanged: losing the gateway still freezes
+  enrolment. Only the compromise half improves, and it improves a lot.
+
+### Presence — a trip to the box to join a second segment (2026-09-20)
+
+**Joining a machine to a second segment requires someone physically at that
+machine.** Typed-fingerprint approval at the hz end is not sufficient on its
+own for this one operation.
+
+The cost lands where it should. Multi-homing is the thing that turns two
+isolated networks into one; it is rare and deliberate by nature, so making it
+expensive is the point rather than a side effect. A control that is cheap to
+exercise is a control that gets exercised.
+
+**Scope, stated explicitly because it is the part that could go wrong:**
+
+| operation | presence? |
+|---|---|
+| first segment — the machine's own project | no; it happens at provision, you are already there |
+| changes within a machine's existing segment — re-key, range change, peer add | **no**, these stay remote-operable |
+| joining a second segment | **yes** |
+| leaving a segment | no; removing a bridge needs no ceremony |
+
+The middle row is the one to watch. If presence were required for *any*
+segment change, renumbering prod's own subnet would need a flight, and the
+control would be routed around inside a year. Correct this if the intent was
+broader.
+
+### Version strings — already decided, in code
+
+`internal/db/configmgr.go:986` — `parsedVersion` is a clean semver tag,
+compared per semver 2.0.0 precedence; build metadata is stripped and never
+compared. `config-manager.md` still lists this as open question 1 — **stale,
+close it.** What remains is redline work, not a decision: split `git describe`
+into the clean tag and the build string.
+
+Workflow consequence worth knowing: `v1.0.0-rc.1-1377-g406804d5` has clean tag
+`1.0.0-rc.1`, so every commit after that tag reports the same version. Config
+ranges cannot distinguish commits — **moving a range means cutting a tag.**
+That is the intended discipline, not a gap.
+
+## Definition of done
+
+The target stated plainly: **a layered project, multi-VPN system that
+replicates the organisational layout** — company root carrying packages, into a
+project with environments and config, versions, and an agent syncing it
+together.
+
+As an acceptance walkthrough, so it is checkable rather than aspirational:
+
+```
+1  iodesystems is a project. It declares the package feed — registry URL,
+   suite, component, signing key. Non-secret, so it cascades.
+2  redline is its child. It inherits the feed and declares its own
+   environments: staging, prod. Each has a posture and a declared version.
+3  a machine enrols into redline's segment. It gets a WireGuard peer config
+   and the inherited apt source, pinned and held.
+4  an app instance on it registers for (redline, staging, app, current),
+   is approved by typed fingerprint, and resolves its sealed config.
+5  hz shows: desired 1.2.3, observed 1.2.1, and which config it resolved.
+6  promoting staging → prod copies invariants, blanks env-bound keys, and
+   installs the same artifact from the same feed into a different segment.
+```
+
+**The root earns its keep at step 1.** Until now `Parent` recorded the tree and
+conferred nothing, and this document said the root would stay a label until
+something was inherited. The package feed is that something: one registry, at
+the company level, that every project's machines install from. It is exactly
+the shape that may cascade under the rule already set — shape inherits, secrets
+do not.
+
+Steps 1–2 landed 2026-09-20: a project declares a `Feed` and descendants
+inherit it, nearest declaration winning whole. Step 3 is phase 4, and the only
+step with nothing built.
+
+**Getting an existing gateway to step 1 landed 2026-09-20 too.** `hz import`
+proposes a tree for a config that has none, and `hz feed set` declares the feed
+on it — until that, declaring one meant hand-editing JSON on the gateway.
+Import is not a migration: `legacy_compat_test.go` already shows a pre-projects
+config loads and saves untouched, so nothing is broken and nothing has to move.
+It is a proposal, dry-run by default, in which **every row names the evidence it
+came from** and a service nothing explains is proposed as *unassigned* — which
+is legal, and which is what every service in such a config already is. A wrong
+project is worse than none: it resolves the wrong config later and looks fine
+now. See plan/plan.md for which signals turned out usable.
+
+**Step 5 has both halves as of 2026-09-20.** Desired lives on
+`Environment.Version`; observed lives on every registration, which now carries
+the version, build string and report time its instance last sent, shown by
+`hz config machines` with an age beside it. What is still owed is the *join* —
+nothing yet renders desired against observed as one drift view. (An earlier
+draft of this paragraph said an environment had no declared version to drift
+from; that was written before the Environment record landed.)
+
+**Step 6 landed 2026-09-20** — the config half of it. `hz config promote` copies the
+invariants by client-side re-seal, carries the environment-bound keys the target
+has already answered, and BLANKS the ones it has not; refuses a promotion that is
+not upward by `PostureRank` unless forced; and errors by name when the target
+declares no `from`. It is a **dry run by default** and posts nothing without
+`--execute`.
+
+Two things about it are worth carrying forward rather than rediscovering:
+
+- **A blank is a ROW, not an omission** (origin `awaiting`). Leaving the key out
+  would have rebuilt goal property 6's founding bug one level up: prod would hold
+  a config in which `PUBLIC_URL` had never been heard of, and the app would fall
+  back to its compiled default. The pull refuses the whole config by name until
+  each blank is answered.
+- **hz cannot read a value, so it cannot copy one.** The re-seal runs entirely in
+  the CLI, between two keys from the local keystore; hz sees a read of one
+  ciphertext and a write of another. The gate it *does* run asks only whether a
+  key is bound and which rung promotes into which — names and declarations, never
+  content.
+
+What step 6 still owes is the other half of its sentence: installing the same
+artifact from the same feed into a different segment. That waits on step 3.
+
+## Blocking decisions
+
+None open. All four resolved 2026-09-20: two by decision, one by decision once
+the install path turned out to be the real constraint, and one by finding it
+already implemented in code.
+
+## Deliberately not building
+
+- **No reconciliation of app artifacts.** hz shows drift; the project closes it.
+- **No push.** The agent pulls; hz holds no inbound credential.
+- **No label selectors.** A Service lists its backends. Selectors buy
+  autoscaling and cost a controller.
+- **No config inheritance for secrets.** Shape cascades, sealed values do not.
+- **No multi-tenancy.** One operator.
+
+## The risk that could sink it
+
+The gateway becomes the network authority for every segment, not just the
+internal one. Today, if it dies, a prod box on AWS is untouched. Under this,
+existing peers keep routing but nothing can be enrolled or re-keyed — it
+degrades to frozen, not down, which is the same posture as cached boot and is
+the right answer. But it makes that box the thing that must never be lost, and
+it is currently a box in an office.
+
+Cached boot and the sequence floor cover hz being *down*. Nothing covers an
+environment key being *lost*. That is why the key backup is phase 1 and not a
+footnote.

@@ -24,7 +24,7 @@
  * Still no test framework: `react-dom/server` to a string, substring assertions
  * over it. Vite bundles it because Node cannot strip JSX.
  *
- * Names are placeholders from plan/design/example-projection.md.
+ * Names are placeholders from docs/design/example-projection.md.
  */
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -1337,7 +1337,7 @@ console.log("· a rung placed in a nested hz reads 'in <upstream>', and only hz 
 {
   // storefront/pci is declared here and placed in prod-hz (Environment.Upstream).
   // DRIFT has no instance at it, so without the upstream it would read
-  // "no machine yet" — the misreport plan/design/estate.md Part A §5 removes.
+  // "no machine yet" — the misreport docs/design/estate.md Part A §5 removes.
   const pci: EnvironmentResp = {
     project: "storefront",
     name: "pci",

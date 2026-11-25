@@ -1,6 +1,6 @@
 /**
  * The Overview queue's markup — "is anything waiting on me?"
- * (plan/design/ui.md, "The screens › Overview").
+ * (docs/design/ui.md, "The screens › Overview").
  *
  * `queue.ts` decides what belongs on screen and in what order; this file only
  * lays it out. Two things it must never do, both load-bearing:

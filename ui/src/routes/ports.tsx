@@ -1,6 +1,6 @@
 /**
  * `/ports` — the unscoped Ports tab: every host's reservations, and the
- * allocation denylist, whoever owns them (plan/design/ui.md, Decision 1,
+ * allocation denylist, whoever owns them (docs/design/ui.md, Decision 1,
  * amendment 6).
  *
  * `AddExclusionDialog` is exported so `/p/$project/ports` can open the same

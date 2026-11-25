@@ -7,7 +7,7 @@
  *
  * Amendment 6 (flows over prose): tables, one-line empty states with the Add
  * button beside them, and the explanation in each chip's title rather than in
- * a paragraph. The four states from plan/design/example-projection.md §4 still
+ * a paragraph. The four states from docs/design/example-projection.md §4 still
  * render as different cells — they are just not paragraphs any more:
  *
  *   ONE ENVIRONMENT is the common case, not an unfinished ladder.

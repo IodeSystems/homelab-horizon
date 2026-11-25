@@ -45,8 +45,8 @@ import (
 // Nothing here decides anything an operator reads: which lines describe a
 // provider, what a failure probably means, whether a zone looks delegated —
 // all of that is render.go, which is pure. When this half moves into hz-agent
-// (plan/design/architecture.md, phase 4, item 12 step 3), this list is what moves, and
-// it is the list that decides whether it may: see plan/design/privilege-audit.md.
+// (docs/design/architecture.md, phase 4, item 12 step 3), this list is what moves, and
+// it is the list that decides whether it may: see docs/design/privilege-audit.md.
 
 // ObtainCertificate requests a certificate for the given domains
 func (c *Client) ObtainCertificate(email string, domains []string, providerCfg *DNSProviderConfig, logFn func(string)) (*certificate.Resource, error) {

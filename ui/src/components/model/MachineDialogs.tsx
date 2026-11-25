@@ -1,7 +1,7 @@
 /**
  * Declaring, editing and removing a machine — the writes
  * `POST /api/v1/machines/{add,set,rm}` had no UI caller for
- * (plan/design/ui.md Decision 1, amendment 5: Machines is `/machines`
+ * (docs/design/ui.md Decision 1, amendment 5: Machines is `/machines`
  * unscoped, `/p/$project/machines` is a derived list with no detail route of
  * its own; amendment 6: a machine may name an owning project). Add and Edit
  * belong to `/machines`, the unscoped screen, `/p/$project/machines` (Add,

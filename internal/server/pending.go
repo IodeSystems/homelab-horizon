@@ -220,7 +220,7 @@ var settingsExcluded = map[string]bool{
 }
 
 // attributionOnly lists the per-element keys that are ATTRIBUTION: which
-// project a record belongs to. Amendment 6 (plan/design/ui.md) pins that
+// project a record belongs to. Amendment 6 (docs/design/ui.md) pins that
 // attribution changes no rendered artifact
 // (TestAttributionChangesNoRenderedArtifact), so a Sync has nothing to publish
 // for it, and counting it as pending told the operator to Sync for nothing —

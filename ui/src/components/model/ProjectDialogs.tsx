@@ -1,6 +1,6 @@
 /**
  * Declaring and removing a project, from the `+` and the remove control on the
- * sidebar tree (plan/design/ui.md, Decision 1, amendment 5 — the operator's
+ * sidebar tree (docs/design/ui.md, Decision 1, amendment 5 — the operator's
  * pick: "+ on the tree").
  *
  * Both call endpoints that had no UI caller (`POST /api/v1/projects/{add,rm}`).

@@ -1,7 +1,7 @@
 /**
  * THE SIDEBAR — WHERE YOU ARE. The project tree, then the gateway group.
  *
- * (plan/design/ui.md, Decision 1, amendment 5.) The sidebar is the SAME at
+ * (docs/design/ui.md, Decision 1, amendment 5.) The sidebar is the SAME at
  * every scope. What changes when you move is which tree node is highlighted
  * and which nodes are open; nothing appears, disappears or is renamed. The six
  * tabs over the page (`ScopeBar`) are WHAT you are looking at.

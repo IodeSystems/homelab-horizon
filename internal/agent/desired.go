@@ -3,7 +3,7 @@
 // applies them.
 //
 // The package is split the same way the subsystem packages already are
-// (plan/design/architecture.md, "hz-agent de-roots the hz web surface"):
+// (docs/design/architecture.md, "hz-agent de-roots the hz web surface"):
 //
 //	desired.go  wire     what hz says a machine should look like. Types only.
 //	plan.go     pure     desired + observed -> changes. No files, no commands.
@@ -125,7 +125,7 @@ type Desired struct {
 	// Model is the projection: what hz's RECORDS say this machine should look
 	// like — its segment memberships, the packages its instances pin, the
 	// units those instances run, and what hz could not work out about any of
-	// it (plan/design/architecture.md phase 4 item 14).
+	// it (docs/design/architecture.md phase 4 item 14).
 	//
 	// IT IS THE ONLY SECTION HZ CAN COMPUTE FOR A MACHINE IT CANNOT TOUCH, and
 	// that is why it exists. Every other section above is produced by
@@ -283,7 +283,7 @@ type FilesSection struct {
 // CertSection carries the certificate bundles HAProxy loads, and nothing else
 // about certificates.
 //
-// Five constraints govern this section (plan/design/architecture.md, "Cert material
+// Five constraints govern this section (docs/design/architecture.md, "Cert material
 // and the two channels"); the two this type is responsible for:
 //
 //   - Only the SERVED bundle, <cert dir>/<domain>.pem — the leaf plus key the
@@ -296,7 +296,7 @@ type FilesSection struct {
 //
 // There is no Dirs claim here deliberately. hz is not the only writer in that
 // directory — pullCertFromPeer writes a peer's bundle into it
-// (plan/design/ha-and-the-agent.md §4) — so claiming it would have the agent delete
+// (docs/design/ha-and-the-agent.md §4) — so claiming it would have the agent delete
 // files another live path had just put there. Whether that writer survives at
 // all is a separate decision (§10.5), and this section does not pre-empt it.
 type CertSection struct {

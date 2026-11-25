@@ -28,7 +28,7 @@ const SIDEBAR_WIDTH = 260;
 /**
  * THE SHELL: wordmark, sidebar, who is signed in, the scope bar, the page.
  *
- * plan/design/ui.md, Decision 1, amendment 5. The sidebar (`SidebarMenu`) is
+ * docs/design/ui.md, Decision 1, amendment 5. The sidebar (`SidebarMenu`) is
  * WHERE — the project tree and the gateway group, the same at every scope. The
  * scope bar (`ScopeBar`) is WHAT — a breadcrumb over the six tabs, drawn here
  * so the unscoped screens and the project screens carry the same bar. Account

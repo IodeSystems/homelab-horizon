@@ -17,7 +17,7 @@ import (
 // THE BYTE-IDENTICAL PROOF FOR wg0.conf's MASQUERADE CLAUSE.
 //
 // Two writers heal that clause today and will until hz stops writing files at
-// all (item 12 step 5, plan/design/privilege-audit.md §7 B):
+// all (item 12 step 5, docs/design/privilege-audit.md §7 B):
 //
 //	hz     reconcileIPTables → WGConfig.HealMasquerade, on the 60s health tick
 //	agent  the WireGuard section's Files, written by Apply

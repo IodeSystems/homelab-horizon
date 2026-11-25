@@ -152,7 +152,7 @@ export function useProjects() {
 
 /**
  * Declare a project. Reversible and renders nothing, which is why it is in the
- * UI at all (plan/design/ui.md Part 1 §8 A: write in the UI for the reversible
+ * UI at all (docs/design/ui.md Part 1 §8 A: write in the UI for the reversible
  * acts). The server validates the whole next config before it stores it.
  */
 export function useAddProject() {
@@ -1330,7 +1330,7 @@ export function useBans() {
 export function useBanIP() {
   const qc = useQueryClient();
   return useMutation({
-    // project attributes the ban (plan/design/ui.md, Decision 1 amendment 6);
+    // project attributes the ban (docs/design/ui.md, Decision 1 amendment 6);
     // omitted or "" is global. BanRequest.project on the wire.
     mutationFn: (input: { ip: string; timeout?: number; reason?: string; project?: string }) =>
       apiFetch("/bans/add", {
@@ -1680,7 +1680,7 @@ export const useFixLogRetention = () => useSystemFix("system/fix/log-retention")
 // There is no useCreateWGConfig and no useFixHAProxyLogging. Both endpoints
 // are gone: each did its work by piping an hz-built shell string through
 // systemd-run to escape hz's own sandbox, and both moved to a CLI verb on the
-// binary that owns the file (plan/design/privilege-audit.md §7 A) —
+// binary that owns the file (docs/design/privilege-audit.md §7 A) —
 // `sudo hz-agent wg-create-config`, `sudo homelab-horizon fix-haproxy-logging`.
 // The health card still DIAGNOSES both and names the command, which is the same
 // shape the unit rows and the dependency rows already have.

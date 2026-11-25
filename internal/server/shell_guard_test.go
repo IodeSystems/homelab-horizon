@@ -180,7 +180,7 @@ func TestTheShellingEndpointsAreNotRegistered(t *testing.T) {
 	} {
 		if strings.Contains(body, gone) {
 			t.Errorf("server.go still registers %s — it moved to a CLI verb "+
-				"(plan/design/privilege-audit.md §7 A)", gone)
+				"(docs/design/privilege-audit.md §7 A)", gone)
 		}
 	}
 }

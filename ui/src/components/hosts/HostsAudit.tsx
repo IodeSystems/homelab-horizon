@@ -2,7 +2,7 @@
  * The address audit — what points at this box, and what breaks if I move it.
  *
  * It used to be the whole `/hosts` screen. It is now one section of
- * `/instances/$instance` for THIS instance (plan/design/ui.md, Decision 1
+ * `/instances/$instance` for THIS instance (docs/design/ui.md, Decision 1
  * amendment 6: flows over prose — the legend and blurb are gone, the table and
  * the move action stay). It reads GET /api/v1/topology/hosts/view and nothing
  * else.

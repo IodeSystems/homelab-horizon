@@ -17,7 +17,7 @@ import (
 // horizon install also installs the agent." Not opt-in, no --agent flag.
 //
 // It exists to dissolve one objection. hz is handing privileged verbs to
-// hz-agent (`wg create-config` first — plan/design/privilege-audit.md §7 and
+// hz-agent (`wg create-config` first — docs/design/privilege-audit.md §7 and
 // the decision list at the end of that file), and the standing argument
 // against every such hand-over has been "the agent is not there at bootstrap".
 // A verb cannot move to a binary that may not exist. Making the binary arrive
@@ -116,7 +116,7 @@ func shipAgent(dir string, src agentSource, dryRun bool, out io.Writer) error {
 		}
 		_, _ = fmt.Fprintf(out, "  Nothing was written. Until a binary is at %s, hz-agent cannot be\n", target)
 		_, _ = fmt.Fprintln(out, "  installed on this box — which is a prerequisite for the privileged")
-		_, _ = fmt.Fprintln(out, "  verbs moving to it (plan/design/privilege-audit.md §7).")
+		_, _ = fmt.Fprintln(out, "  verbs moving to it (docs/design/privilege-audit.md §7).")
 		return nil
 	}
 

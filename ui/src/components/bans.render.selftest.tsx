@@ -1,5 +1,5 @@
 /**
- * Assertions for the Bans tab (plan/design/ui.md, Decision 1, amendment 6),
+ * Assertions for the Bans tab (docs/design/ui.md, Decision 1, amendment 6),
  * driven through the real router — same shape and same reason as
  * `model/projectRoutes.render.selftest.tsx`: `react-dom/server` to a string,
  * substring assertions over it, the real `routeTree.gen.ts` so a layout

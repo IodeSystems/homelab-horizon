@@ -185,7 +185,7 @@ type Config struct {
 	// Machines are the boxes: identity and segment membership, and deliberately
 	// neither a project nor an environment — those are coordinates of an
 	// INSTANCE, and one machine hosts instances from several projects
-	// (plan/design/architecture.md, "Instance, not machine, carries the environment").
+	// (docs/design/architecture.md, "Instance, not machine, carries the environment").
 	// Additive in exactly the way Projects and Environments are. See
 	// internal/config/machine.go for what else is absent and why.
 	Machines []Machine `json:"machines,omitempty"`
@@ -721,7 +721,7 @@ type Project struct {
 	// A pointer because absent and empty are different answers: nil is "this
 	// project says nothing, ask my parent", and a zero Feed is a declaration
 	// with nothing in it, which ValidateFeeds rejects. Collapsing the two is
-	// goal property 6 in plan/design/architecture.md — the founding bug.
+	// goal property 6 in docs/design/architecture.md — the founding bug.
 	Feed *Feed `json:"feed,omitempty"`
 
 	// PinnedLines are release lines the operator keeps supported beyond the
@@ -774,7 +774,7 @@ func (c *Config) ValidateProjects() error {
 			return fmt.Errorf("service %q names project %q, which does not exist", svc.Name, svc.Project)
 		}
 	}
-	// Attribution (plan/design/ui.md, Decision 1 amendment 6). Every one of
+	// Attribution (docs/design/ui.md, Decision 1 amendment 6). Every one of
 	// these is optional and "" means global; a NAMED project has to exist, or
 	// the record reads as global on every screen while claiming an owner.
 	attributed := func(kind, name, project string) error {
@@ -851,7 +851,7 @@ type Environment struct {
 	// they are not ours. An environment with an Upstream is declared here so
 	// that promotion edges into it and its version are ours to state — but
 	// asking "which machines run it" is a question for that hz, not a gap in
-	// this one (plan/design/estate.md Part A §5).
+	// this one (docs/design/estate.md Part A §5).
 	//
 	// It is the NAME of a declared HZInstance — a nested hz is its own record,
 	// never a Machine (B3, hz_instance.go). "" is placed here: hz answers from

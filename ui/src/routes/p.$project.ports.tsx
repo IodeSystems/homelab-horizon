@@ -1,5 +1,5 @@
 /**
- * `/p/$project/ports` — the Ports tab inside a project (plan/design/ui.md,
+ * `/p/$project/ports` — the Ports tab inside a project (docs/design/ui.md,
  * Decision 1, amendment 6). Two sections, because two different records are
  * attributed here:
  *

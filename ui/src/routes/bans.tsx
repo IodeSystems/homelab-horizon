@@ -1,5 +1,5 @@
 /**
- * `/bans` — every IP ban, whoever it is attributed to (plan/design/ui.md,
+ * `/bans` — every IP ban, whoever it is attributed to (docs/design/ui.md,
  * Decision 1, amendment 6).
  *
  * Attribution is organisational only: `IPBan.Project` names who asked for the

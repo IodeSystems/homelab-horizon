@@ -57,7 +57,7 @@ const INSTALL_DEPS_HINT = "sudo homelab-horizon install-deps";
 // the same shape. Both endpoints existed until 2026-09-25 and both worked by
 // piping an hz-built shell string through `systemd-run … bash -c` to escape
 // hz's own sandbox — a web process that can do that is not de-rooted, whatever
-// uid it holds (plan/design/privilege-audit.md §5.2 rules 1 and 3).
+// uid it holds (docs/design/privilege-audit.md §5.2 rules 1 and 3).
 //
 // The diagnosis stays exactly where it was. What changed is who acts on it.
 const CREATE_WG_CONFIG_HINT = "sudo hz-agent wg-create-config";

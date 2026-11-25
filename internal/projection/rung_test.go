@@ -23,7 +23,7 @@ func rungEstate() *config.Config {
 
 // A rung with an Upstream is a STATEMENT — placed in that hz — and never a
 // Gap: this hz having no machine for it is the model being right
-// (plan/design/estate.md Part A §5).
+// (docs/design/estate.md Part A §5).
 func TestAnUpstreamRungIsPlacedRemotelyNotAGap(t *testing.T) {
 	cfg := rungEstate()
 	prod, _ := cfg.LookupEnvironment("redline", "prod")

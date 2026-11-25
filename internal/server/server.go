@@ -1242,7 +1242,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/projects/lines/unpin", s.handleAPILinePin(false))
 	// The machines: identity and segment membership. No project and no
 	// environment — those are coordinates of an instance, not of a box
-	// (plan/design/architecture.md, "Instance, not machine, carries the environment").
+	// (docs/design/architecture.md, "Instance, not machine, carries the environment").
 	mux.HandleFunc("/api/v1/machines", s.handleAPIMachines)
 	mux.HandleFunc("/api/v1/machines/add", s.handleAPIMachineAdd)
 	mux.HandleFunc("/api/v1/machines/set", s.handleAPIMachineSet)
@@ -1398,7 +1398,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/cm/current-key", s.handleAPICMCurrentKey)
 	// Version drift: the declared version of every instance's rung beside the
 	// version that instance last reported. The join
-	// plan/design/example-projection.md §7 records as missing — see
+	// docs/design/example-projection.md §7 records as missing — see
 	// handlers_version_drift.go. Not the agent channel: different clock.
 	mux.HandleFunc(apitypes.CMPathVersionDrift, s.handleAPICMVersionDrift)
 	// Key custody. These read and write the CONFIG, not the identity store, so
@@ -1423,7 +1423,7 @@ func (s *Server) setupRoutes() *http.ServeMux {
 	// `systemd-run … bash -c` to escape hz's own ProtectSystem=strict sandbox,
 	// which is §5.2 rules 1 and 3 at once, and between them they were the only
 	// reason the systemdRun helper existed. They moved to the binaries that own
-	// the files (plan/design/privilege-audit.md §7 A):
+	// the files (docs/design/privilege-audit.md §7 A):
 	//
 	//   wg0.conf             sudo hz-agent wg-create-config     (refuses to replace one)
 	//   haproxy's logging    sudo homelab-horizon fix-haproxy-logging

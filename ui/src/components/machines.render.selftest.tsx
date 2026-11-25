@@ -6,7 +6,7 @@
  * .selftest.tsx` — that file already carries the base "owned vs. crossing"
  * checks for `/p/$project/machines` (its own `MACHINES`/`APPROVED` fixtures),
  * and a second, independent fixture set here catches a mistake the first
- * happens not to exercise (`plan/design/ui.md`, Decision 1 amendment 6:
+ * happens not to exercise (`docs/design/ui.md`, Decision 1 amendment 6:
  * "sections... attributed to a project or considered global").
  *
  * MUI's Dialog renders through a Portal, which `renderToStaticMarkup`

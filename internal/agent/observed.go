@@ -83,7 +83,7 @@ type StateReport struct {
 	// hz compares it with what it would serve now: a different one means the
 	// box has not polled the current config yet; the SAME one with pending
 	// changes means the agent planned against today's config and the machine
-	// still does not match it (plan/design/example-projection.md §5 — "applied and
+	// still does not match it (docs/design/example-projection.md §5 — "applied and
 	// did not take" is a different fault from "behind", and one badge merges
 	// them).
 	Generation string `json:"generation"`
@@ -219,7 +219,7 @@ func (r StateReport) Sanitized() StateReport {
 //
 // False is "nothing to report" — an enrolled box with an agent and no managed
 // subsystem, which is correct and permanent and must not render as silence
-// (plan/design/example-projection.md §3, ci-1).
+// (docs/design/example-projection.md §3, ci-1).
 func (r StateReport) HasTargets() bool { return len(r.Changes) > 0 || r.IPTables != nil }
 
 // Pending counts the changes that would touch the machine. A removal counts:

@@ -15,12 +15,12 @@ import (
 // struct rather than left to the comment that explains them.
 
 // A machine has no environment, and its fields are exactly {Name, Project,
-// Segments, Note}. plan/design/architecture.md: "an environment never modifies
+// Segments, Note}. docs/design/architecture.md: "an environment never modifies
 // a machine; it is a coordinate of an instance."
 //
-// Project is PRESENT since CLAUDE.md invariant 6 was amended (plan/design/ui.md,
+// Project is PRESENT since CLAUDE.md invariant 6 was amended (docs/design/ui.md,
 // Decision 1 amendment 6): it is the OWNER — responsibility, not placement. The
-// gateway in plan/design/example-projection.md §3 still hosts instances from two
+// gateway in docs/design/example-projection.md §3 still hosts instances from two
 // projects whatever its owner is. The exact field list is pinned so that the
 // next field — an environment spelled some new way, a placement — is a
 // decision somebody has to make here, not a line that slips in.
@@ -40,7 +40,7 @@ func TestAMachineCarriesNoEnvironment(t *testing.T) {
 			if name == bad {
 				t.Fatalf("Machine has a %s field. An environment is a coordinate of an INSTANCE; "+
 					"one machine hosts instances from several rungs of several projects, so this field is false for the gateway "+
-					"the moment it exists (plan/design/architecture.md, \"Instance, not machine, carries the environment\")",
+					"the moment it exists (docs/design/architecture.md, \"Instance, not machine, carries the environment\")",
 					tp.Field(i).Name)
 			}
 		}
@@ -72,7 +72,7 @@ func TestAMachineCarriesNoObservedVersion(t *testing.T) {
 	}
 }
 
-// Multi-segment is legal — ci-1 in plan/design/example-projection.md §3 is in two on
+// Multi-segment is legal — ci-1 in docs/design/example-projection.md §3 is in two on
 // purpose — and it is visible: the record says so, and the config can enumerate
 // every machine that bridges.
 func TestAMultiSegmentMachineIsLegalAndListable(t *testing.T) {

@@ -2,7 +2,7 @@
  * The Overview queue — "is anything waiting on me?", merged from five reads
  * hz already serves, with no React in it (see `queue.selftest.ts`).
  *
- * plan/design/ui.md, Decision 3: the ranking hz's screens share is
+ * docs/design/ui.md, Decision 3: the ranking hz's screens share is
  *
  *   1 waiting on you   2 not known   3 reporting a fault
  *   4 undelivered      5 drifting    6 informational

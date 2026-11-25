@@ -31,7 +31,7 @@ import (
 // The two handlers that needed it moved to the binaries that own the files:
 // `sudo hz-agent wg-create-config` writes wg0.conf, `sudo homelab-horizon
 // fix-haproxy-logging` repairs haproxy's logging. Both had been "move" items
-// on item 12's readiness checklist (plan/design/privilege-audit.md §7 A) and
+// on item 12's readiness checklist (docs/design/privilege-audit.md §7 A) and
 // the checklist named them as systemdRun's last two callers — which was stale:
 // wg/create-config never called it, so moving fix-logging alone is what
 // retired it.

@@ -27,7 +27,7 @@
  * `MoveHostPanel`), so the shell stays three props with no logic in it and
  * everything that has a rule lives where it can be rendered offline.
  *
- * Names are placeholders from plan/design/example-projection.md.
+ * Names are placeholders from docs/design/example-projection.md.
  */
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";

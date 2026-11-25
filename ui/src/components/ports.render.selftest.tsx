@@ -15,7 +15,7 @@
  * assertion here is about a CONTROL (a button's presence), never about a
  * dialog's body.
  *
- * Names are placeholders from plan/design/example-projection.md.
+ * Names are placeholders from docs/design/example-projection.md.
  */
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";

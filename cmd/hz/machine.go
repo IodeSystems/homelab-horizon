@@ -19,7 +19,7 @@ import (
 //
 // WHAT A MACHINE IS NOT, said here because the listing is where somebody would
 // look for it: it has no environment. That is a coordinate of an INSTANCE
-// (plan/design/architecture.md, "Instance, not machine, carries the
+// (docs/design/architecture.md, "Instance, not machine, carries the
 // environment"). It MAY name an owning project (--project) — who answers for
 // the box, not what runs on it: the gateway hosts instances from two projects
 // whatever its owner is (CLAUDE.md invariant 6, amended). It has no observed
