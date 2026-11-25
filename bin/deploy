@@ -2,7 +2,7 @@
 # Deploy homelab-horizon to one or more hosts.
 #
 # Usage:
-#   ./bin/deploy                                    # fan out over .hz.json
+#   ./bin/deploy                                    # fan out over .hz.json (required; no default host)
 #   ./bin/deploy --host user@h                      # single host, local build
 #   ./bin/deploy --host user@h --version v0.0.1     # single host, release
 #   ./bin/deploy --version v0.0.1                   # fan out, pin all to vX
@@ -26,7 +26,6 @@
 
 set -euo pipefail
 
-DEFAULT_HOST="ubuntu@192.168.1.89"
 CONFIG_FILE=".hz.json"
 REMOTE_PATH="/usr/local/bin/homelab-horizon"
 # The UI is served from disk rather than embedded (WEB-5), so a deploy ships two
@@ -55,7 +54,7 @@ Usage: $0 [--host USER@HOST] [--version vX.Y.Z]
   -h, --help   Show this help
 
 No --host: read $CONFIG_FILE (JSON array of {host, version}) and fan out.
-No $CONFIG_FILE either: fall back to $DEFAULT_HOST, local build.
+No $CONFIG_FILE either: error (there is no default host).
 HELP
 }
 
@@ -108,8 +107,9 @@ elif [ -f "$CONFIG_FILE" ]; then
     VERSIONS+=("${CLI_VERSION:-$v}")
   done
 else
-  HOSTS+=("$DEFAULT_HOST")
-  VERSIONS+=("$CLI_VERSION")
+  printf >&2 "deploy: no host. Pass --host USER@HOST or create %s.\n" "$CONFIG_FILE"
+  usage >&2
+  exit 2
 fi
 
 # ----- Probe arches --------------------------------------------------------
