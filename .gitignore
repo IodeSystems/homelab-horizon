@@ -64,3 +64,6 @@ ui/.rendercheck-zonerecords
 ui/.rendercheck-derivednames
 ui/.rendercheck-invite
 ui/.rendercheck-mfa
+
+# operator plan: local only, never published
+/plan/
